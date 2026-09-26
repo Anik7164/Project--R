@@ -1,0 +1,29 @@
+# Python Environments
+.venv/
+venv/
+env/
+__pycache__/
+*.pyc
+
+# YOLO & Computer Vision Models
+*.pt
+yolo11n.pt
+runs/
+
+# Media & Data Files (Large files)
+*.mp4
+*.avi
+*.mkv
+*.mp3
+*.wav
+sample_match.mp4
+
+# IDEs & OS Files
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+
+# Logs & Caches
+*.log
+.ruff_cache/
