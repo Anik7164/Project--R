@@ -1,29 +1,49 @@
-# Python Environments
+
+# Python
+__pycache__/
+*.py[cod]
 .venv/
 venv/
 env/
-__pycache__/
-*.pyc
 
-# YOLO & Computer Vision Models
-*.pt
-yolo11n.pt
-runs/
+# Secrets
+.env
+.env.*
+!.env.example
 
-# Media & Data Files (Large files)
-*.mp4
-*.avi
-*.mkv
-*.mp3
-*.wav
-sample_match.mp4
-
-# IDEs & OS Files
+# Editors and operating system
 .vscode/
 .idea/
-.DS_Store
 Thumbs.db
+.DS_Store
 
-# Logs & Caches
+# AI models and checkpoints
+*.pt
+*.pth
+*.onnx
+*.safetensors
+*.ckpt
+*.engine
+
+# Videos and generated media
+data/videos/*
+!data/videos/.gitkeep
+*.mp4
+*.avi
+*.mov
+*.mkv
+*.webm
+
+# Outputs and caches
+outputs/*
+!outputs/.gitkeep
+.cache/
+runs/
+wandb/
+
+# Local databases and logs
+*.db
+*.sqlite
+*.sqlite3
 *.log
-.ruff_cache/
+*.tmp

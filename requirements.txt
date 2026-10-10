@@ -1,1 +1,11 @@
-pip install ultralytics opencv-python
+
+# Core computer vision and GPU inference
+--extra-index-url https://download.pytorch.org/whl/cu132
+torch==2.13.0+cu132
+torchvision==0.28.0+cu132
+ultralytics==8.4.175
+opencv-python==5.0.0.93
+numpy==2.2.6
+
+# LLM client used by the project
+ollama
