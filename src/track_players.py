@@ -13,8 +13,8 @@ MODEL_PATH = Path(r"F:\AI_Models\Ultralytics\yolo26n.pt")
 TRACKER_CONFIG = ROOT / "botsort_custom.yaml"
 
 OUTPUT_DIR = ROOT / "outputs" / "tracking"
-OUTPUT_VIDEO = OUTPUT_DIR / "test1_botsort.mp4"
-OUTPUT_CSV = OUTPUT_DIR / "test1_botsort_tracks.csv"
+OUTPUT_VIDEO = OUTPUT_DIR / "test1_botsort_reid.mp4"
+OUTPUT_CSV = OUTPUT_DIR / "test1_botsort_reid_tracks.csv"
 
 # Detection settings
 CONFIDENCE = 0.35
