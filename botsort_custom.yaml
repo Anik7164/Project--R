@@ -7,7 +7,7 @@ track_low_thresh: 0.10
 new_track_thresh: 0.40
 
 # Retain lost tracks for up to 60 frames
-track_buffer: 60
+track_buffer: 90
 
 # Matching threshold
 match_thresh: 0.80
