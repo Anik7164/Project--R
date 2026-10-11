@@ -77,7 +77,7 @@ def main():
                         tracker="bytetrack.yaml",
                         persist=True,
                         classes=[0],  # COCO person class
-                        conf=0.20,
+                        conf=0.35,
                         imgsz=640,
                         device=device,
                         verbose=False,
