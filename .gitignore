@@ -18,7 +18,6 @@ Thumbs.db
 .DS_Store
 
 # AI models and checkpoints
-*.pt
 *.pth
 *.onnx
 *.safetensors
