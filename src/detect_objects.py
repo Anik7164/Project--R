@@ -8,7 +8,7 @@ from ultralytics import YOLO
 # Project paths
 ROOT = Path(__file__).resolve().parent.parent
 VIDEO_PATH = ROOT / "data" / "videos" / "test1.mp4"
-MODEL_PATH = Path(r"F:\AI_Models\Ultralytics\yolo26n.pt")
+MODEL_PATH = ROOT / "yolo26n.pt"
 OUTPUT_DIR = ROOT / "outputs" / "detection"
 OUTPUT_PATH = OUTPUT_DIR / "test1_detected.mp4"
 
