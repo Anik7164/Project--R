@@ -29,7 +29,7 @@ from dataclasses import dataclass, field
 import numpy as np
 from scipy.optimize import linear_sum_assignment
 
-from appearance import blend, descriptor_distance, extract_descriptor
+from appearance import blend, descriptor_distance, extract_descriptor, on_pitch
 from camera_motion import CameraMotionEstimator, warp_box
 
 
@@ -45,18 +45,23 @@ class IdentityConfig:
     # Forget missing players after this many frames (~10 s at 30 fps).
     max_missing_frames: int = 300
 
-    # Motion gate, in units of the player's box height.
-    gate_base: float = 1.0
-    gate_growth_per_frame: float = 0.04
+    # Motion gate, in units of the player's box height. A sprinting player
+    # covers about 0.15 of their own height per frame at 25 fps. Tuned on
+    # broadcast footage (test1.mp4).
+    gate_base: float = 1.5
+    gate_growth_per_frame: float = 0.15
     gate_max: float = 6.0
     # Frames of constant velocity extrapolation for missing players.
     max_extrapolation_frames: int = 15
-    # Missing longer than this (~2 s at 30 fps), a player could be
+    # Missing longer than this (5 s at 25 fps), a player could be
     # anywhere, so only a distinctive appearance can re-link them.
-    motion_horizon: int = 60
+    motion_horizon: int = 125
 
-    # Appearance gates (Hellinger distance, 0 = identical).
-    appearance_gate: float = 0.45
+    # Appearance gates (Hellinger distance, 0 = identical). On real
+    # broadcast crops, two views of the same player 0.4-2 s apart are
+    # within 0.57 in 90% of cases (small, blurred players), so the gate
+    # inside one shot is loose; it mainly keeps the other team out.
+    appearance_gate: float = 0.65
     appearance_gate_after_cut: float = 0.30
     # After a cut, or after motion_horizon, the best candidate must be
     # clearly better than the runner-up: best <= ratio * second_best and second_best - best >=
@@ -69,7 +74,13 @@ class IdentityConfig:
     # someone who disappeared in the middle of the view (occlusion).
     border_margin: float = 0.5
 
-    # Appearance score used when a player had no clean view.
+    # Inside a shot, a link after more than ambiguity_free_gap frames is
+    # refused when the runner-up candidate's cost is within this margin.
+    ambiguity_margin: float = 0.1
+    ambiguity_free_gap: int = 10
+
+    # Appearance score used when a player had no clean view; such links
+    # also need the player within gate_base box heights.
     unknown_appearance: float = 0.3
 
     appearance_weight: float = 0.5
@@ -83,6 +94,9 @@ class IdentityConfig:
     # Boxes covered by another box beyond this fraction get no
     # appearance update.
     overlap_limit: float = 0.15
+
+    # Drop people whose feet are not on grass (crowd, staff, close-ups).
+    require_on_pitch: bool = True
 
     # Duplicate suppression inside a frame.
     duplicate_containment: float = 0.9
@@ -405,6 +419,7 @@ class IdentityManager:
         cost = np.full((len(pending_ids), len(candidates)), inf)
         appearance = np.ones_like(cost)
         appearance_only = np.zeros(cost.shape, dtype=bool)
+        gaps = np.zeros(cost.shape)
 
         for i, tid in enumerate(pending_ids):
             pending = self.pending[tid]
@@ -414,6 +429,7 @@ class IdentityManager:
                 if player.last_frame >= pending.first_frame:
                     continue
                 gap = pending.first_frame - player.last_frame
+                gaps[i, j] = gap
                 app = descriptor_distance(feature, player.feature)
                 appearance[i, j] = app
 
@@ -425,7 +441,8 @@ class IdentityManager:
                         cost[i, j] = app / cfg.appearance_gate_after_cut
                     continue
 
-                if feature is None or player.feature is None:
+                unknown = feature is None or player.feature is None
+                if unknown:
                     # No clean view yet (overlapping players): decide on
                     # motion alone, with a neutral appearance score.
                     app = cfg.unknown_appearance
@@ -442,7 +459,7 @@ class IdentityManager:
                     cfg.gate_max,
                     cfg.gate_base + cfg.gate_growth_per_frame * gap,
                 )
-                if distance > gate:
+                if distance > gate or (unknown and distance > cfg.gate_base):
                     continue
                 entering = self._near_border(
                     _center(pending.first_box), _height(pending.first_box)
@@ -466,6 +483,21 @@ class IdentityManager:
                 or runner_up - appearance[i, j] < cfg.cut_margin
             ):
                 cost[i, j] = inf
+
+        # Inside a shot, after more than a moment apart, two candidates that
+        # fit about equally well (teammates near each other) mean we cannot
+        # tell who this is.
+        for i in range(len(pending_ids)):
+            finite = np.nonzero((cost[i] < inf) & ~appearance_only[i])[0]
+            if len(finite) < 2:
+                continue
+            order = finite[np.argsort(cost[i, finite])]
+            best, second = order[0], order[1]
+            if (
+                gaps[i, best] > cfg.ambiguity_free_gap
+                and cost[i, second] - cost[i, best] < cfg.ambiguity_margin
+            ):
+                cost[i, finite] = inf
 
         rows, cols = linear_sum_assignment(cost)
         matches = {}
@@ -498,7 +530,8 @@ class StablePlayerTracker:
     def process(self, frame_index, frame, tracker_ids, boxes, confidences):
         """Return (keep, assignments, resolved).
 
-        keep: indices of the input detections that are not duplicates.
+        keep: indices of the input detections that are players: not
+            duplicates and (by default) standing on the pitch.
         assignments: player ID (or None while pending) for each kept index.
         resolved: see IdentityManager.update.
         """
@@ -511,6 +544,11 @@ class StablePlayerTracker:
 
         warp, cut = self.camera.update(frame, [boxes[i] for i in keep])
         self.last_cut = cut
+
+        # People not standing on grass are spectators, staff or faces in
+        # close-ups, not players.
+        if cfg.require_on_pitch:
+            keep = [i for i in keep if on_pitch(frame, boxes[i])]
         # A box that overlaps another one mixes two players' colours;
         # leave it out of the appearance model.
         kept_boxes = [boxes[i] for i in keep]

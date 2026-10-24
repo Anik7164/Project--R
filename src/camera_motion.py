@@ -9,10 +9,14 @@ frame, so positions of players who left the view can be carried along
 while the camera moves.
 
 A scene cut (replay, close-up, switch to another camera) is reported when
-the colour content changes abruptly or the background can no longer be
+the colour content changes abruptly, when the picture jumps much more than
+it did in the frames before (a cut between two similar wide shots keeps
+the colours but not the pixels), or when the background can no longer be
 followed. Positions from before a cut are not comparable with positions
 after it.
 """
+
+from collections import deque
 
 import cv2
 import numpy as np
@@ -32,6 +36,19 @@ BOX_MASK_PADDING = 0.15
 MIN_INLIERS = 12
 MIN_TRACKED_RATIO = 0.25
 CUT_HIST_CORRELATION = 0.55
+# Dissolves (one shot fading into the next) change the colours slowly;
+# compare with the frame this many frames back as well.
+DISSOLVE_LAG = 8
+DISSOLVE_CORRELATION = 0.4
+# Pixel jump: mean absolute difference of a thumbnail (0-255) that is above
+# CUT_JUMP_MIN and CUT_JUMP_RATIO times the recent typical difference.
+CUT_JUMP_MIN = 20.0
+CUT_JUMP_RATIO = 3.0
+CUT_JUMP_HISTORY = 10
+# A dissolve or a fast close-up can trigger several frames in a row; one
+# cut per this many frames is enough.
+CUT_REFRACTORY = 10
+THUMBNAIL_SIZE = (160, 90)
 
 IDENTITY = np.array([[1.0, 0.0, 0.0], [0.0, 1.0, 0.0]], dtype=np.float64)
 
@@ -47,11 +64,18 @@ class CameraMotionEstimator:
         self.process_width = process_width
         self.prev_gray = None
         self.prev_hist = None
+        self.prev_thumb = None
+        self.jumps = deque(maxlen=CUT_JUMP_HISTORY)
+        self.hists = deque(maxlen=DISSOLVE_LAG)
+        self.since_cut = CUT_REFRACTORY
         self.scale = 1.0
 
     def reset(self):
         self.prev_gray = None
         self.prev_hist = None
+        self.prev_thumb = None
+        self.jumps.clear()
+        self.hists.clear()
 
     def _background_mask(self, shape, boxes):
         height, width = shape
@@ -75,6 +99,34 @@ class CameraMotionEstimator:
         previous frame to this one. On a cut (or the first frame) the warp
         is the identity and is meaningless.
         """
+        first = self.prev_gray is None
+        warp, cut = self._estimate(frame, boxes)
+        if first:
+            return warp, cut
+        if cut:
+            if self.since_cut < CUT_REFRACTORY:
+                # Still inside the last cut's transition: no new cut, and
+                # no usable motion either.
+                cut, warp = False, IDENTITY.copy()
+            self.since_cut = 0
+        self.since_cut += 1
+        return warp, cut
+
+    def _jumped(self, thumb):
+        prev = self.prev_thumb
+        self.prev_thumb = thumb
+        if prev is None:
+            return False
+        jump = float(np.mean(cv2.absdiff(prev, thumb)))
+        history = list(self.jumps)
+        self.jumps.append(jump)
+        # Too little history to know what a normal frame-to-frame change is.
+        if len(history) < 3:
+            return False
+        typical = float(np.median(history))
+        return jump > CUT_JUMP_MIN and jump > CUT_JUMP_RATIO * max(typical, 2.0)
+
+    def _estimate(self, frame, boxes):
         frame_h, frame_w = frame.shape[:2]
         self.scale = min(1.0, self.process_width / float(frame_w))
         small = cv2.resize(
@@ -84,6 +136,9 @@ class CameraMotionEstimator:
         )
         gray = cv2.cvtColor(small, cv2.COLOR_BGR2GRAY)
         hist = _histogram(small)
+        jumped = self._jumped(
+            cv2.resize(gray, THUMBNAIL_SIZE, interpolation=cv2.INTER_AREA)
+        )
 
         prev_gray, prev_hist = self.prev_gray, self.prev_hist
         self.prev_gray, self.prev_hist = gray, hist
@@ -92,7 +147,16 @@ class CameraMotionEstimator:
             return IDENTITY.copy(), True
 
         correlation = cv2.compareHist(prev_hist, hist, cv2.HISTCMP_CORREL)
-        if correlation < CUT_HIST_CORRELATION:
+        dissolved = (
+            len(self.hists) == DISSOLVE_LAG
+            and cv2.compareHist(self.hists[0], hist, cv2.HISTCMP_CORREL)
+            < DISSOLVE_CORRELATION
+        )
+        self.hists.append(hist)
+        if jumped or dissolved or correlation < CUT_HIST_CORRELATION:
+            self.jumps.clear()
+            self.hists.clear()
+            self.hists.append(hist)
             return IDENTITY.copy(), True
 
         mask = self._background_mask(gray.shape, boxes)

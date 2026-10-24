@@ -52,9 +52,10 @@ python src/evaluate_tracking.py outputs/tracking/test1_tracks.csv
 BoT-SORT alone gives a player a new ID whenever it loses them: occlusion, leaving the view while the camera pans, or a broadcast cut. `src/identity.py` adds a stable player ID on top:
 
 * **Camera motion** (`src/camera_motion.py`): the pan/zoom between frames is estimated from the background, so a player who left the view is still expected at the right place in current-frame pixels when they come back.
-* **Scene cuts** (replays, close-ups) are detected; positions from before a cut are not trusted after it.
+* **Scene cuts** (replays, close-ups, cuts between two wide cameras, dissolves) are detected; positions from before a cut are not trusted after it.
 * **Re-linking**: a new BoT-SORT ID is pending for 3 frames, then matched to a currently missing player by position (gate grows with time missing) and shirt/shorts colour, or given a new ID. When only colour is available (after a cut, or missing for over ~2 s), ambiguous links between teammates are refused: a new ID is safer than a wrong one.
 * **Duplicates**: a partial-body box inside a bigger box of the same player is dropped.
+* **Not players**: people whose feet are not on grass (crowd, staff, faces in close-ups) are left out.
 
 `outputs/tracking/test1_tracks.csv` keeps both IDs: `track_id` (stable) and `tracker_id` (raw BoT-SORT), so `evaluate_tracking.py` can compare them on any clip. With MOTChallenge ground truth (for example SoccerNet tracking) add `--gt gt.txt` for IDF1/MOTA (`pip install motmetrics`).
 

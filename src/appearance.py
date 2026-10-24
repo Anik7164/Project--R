@@ -42,6 +42,27 @@ def grass_mask(hsv):
     )
 
 
+# Share of grass pixels around the feet below which a person is not on the
+# pitch (spectators, staff in the stands, faces in close-ups, logos).
+MIN_GRASS_AT_FEET = 0.25
+
+
+def on_pitch(frame, box):
+    """True if the person in box is standing on grass."""
+    x1, y1, x2, y2 = [float(v) for v in box]
+    width, height = x2 - x1, y2 - y1
+    frame_h, frame_w = frame.shape[:2]
+    top = int(max(0, y2 - 0.1 * height))
+    bottom = int(min(frame_h, y2 + 0.1 * height))
+    left = int(max(0, x1 - 0.25 * width))
+    right = int(min(frame_w, x2 + 0.25 * width))
+    if bottom <= top or right <= left:
+        return False
+    region = frame[top:bottom, left:right]
+    hsv = cv2.cvtColor(region, cv2.COLOR_BGR2HSV)
+    return float(np.mean(grass_mask(hsv))) >= MIN_GRASS_AT_FEET
+
+
 def _band(frame, box, band):
     x1, y1, x2, y2 = box
     height = y2 - y1
