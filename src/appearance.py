@@ -124,3 +124,52 @@ def blend(old, new, momentum=0.9):
         return old
     mixed = momentum * old + (1.0 - momentum) * new
     return mixed / mixed.sum()
+
+
+# Colour names for commentary, keyed by OpenCV hue (0-180) upper bound.
+HUE_NAMES = [
+    (8, "red"), (20, "orange"), (33, "yellow"), (85, "green"),
+    (100, "sky blue"), (130, "blue"), (150, "purple"), (165, "pink"),
+    (181, "red"),
+]
+
+BENGALI_COLOUR_NAMES = {
+    "red": "লাল",
+    "orange": "কমলা",
+    "yellow": "হলুদ",
+    "green": "সবুজ",
+    "sky blue": "আকাশি",
+    "blue": "নীল",
+    "purple": "বেগুনি",
+    "pink": "গোলাপি",
+    "white": "সাদা",
+    "grey": "ধূসর",
+    "black": "কালো",
+}
+
+
+def shirt_colour_name(descriptor):
+    """English name of the dominant shirt colour in a descriptor."""
+    if descriptor is None:
+        return None
+    coloured_size = HUE_BINS * SAT_BINS
+    shirt = descriptor[: coloured_size + VALUE_BINS]
+    hue_sat = shirt[:coloured_size].reshape(HUE_BINS, SAT_BINS)
+    value = shirt[coloured_size:]
+
+    if hue_sat.sum() >= value.sum():
+        hue_bin = int(np.argmax(hue_sat.sum(axis=1)))
+        hue = (hue_bin + 0.5) * 180.0 / HUE_BINS
+        for upper, name in HUE_NAMES:
+            if hue < upper:
+                return name
+
+    mean_value = float(
+        np.dot(value, (np.arange(VALUE_BINS) + 0.5) * 256.0 / VALUE_BINS)
+        / max(value.sum(), 1e-9)
+    )
+    if mean_value < 70:
+        return "black"
+    if mean_value < 170:
+        return "grey"
+    return "white"

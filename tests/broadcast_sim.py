@@ -53,10 +53,20 @@ def make_players(rng):
             "id": pid,
             "role": role,
             # Spot in the team shape, relative to the ball.
-            "offset": np.array([rng.uniform(-700, 700), rng.uniform(-450, 450)]),
+            # Home defends the left goal, away the right one.
+            "offset": np.array([
+                rng.uniform(-900, 300) if role.startswith("home") else rng.uniform(-300, 900),
+                rng.uniform(-450, 450),
+            ]),
             "pos": np.array([PITCH_W / 2, PITCH_H / 2]) + rng.uniform(-600, 600, 2),
             "vel": np.zeros(2),
         })
+    for p in players:
+        # Goalkeepers start in their goal.
+        if p["role"] == "home_gk":
+            p["pos"] = np.array([380.0, PITCH_H / 2])
+        elif p["role"] == "away_gk":
+            p["pos"] = np.array([PITCH_W - 380.0, PITCH_H / 2])
     return players
 
 
@@ -93,6 +103,10 @@ def simulate(frames=600, seed=0, cut_ranges=((300, 330),), break_prob=0.004,
 
         for p in players:
             target = ball + 0.6 * p["offset"]
+            if p["role"] == "home_gk":
+                target = np.array([380.0, ball[1] * 0.3 + PITCH_H * 0.35])
+            elif p["role"] == "away_gk":
+                target = np.array([PITCH_W - 380.0, ball[1] * 0.3 + PITCH_H * 0.35])
             pull = np.clip((target - p["pos"]) * 0.02, -2.5, 2.5)
             p["vel"] = 0.9 * p["vel"] + 0.1 * pull + rng.normal(0, 0.3, 2)
             p["pos"] = np.clip(p["pos"] + p["vel"], [100, 100], [PITCH_W - 100, PITCH_H - 100])
