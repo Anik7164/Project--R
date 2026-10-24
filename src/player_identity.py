@@ -4,7 +4,8 @@ How the commentary refers to a player, and filling the Bengali templates.
 Fallback chain, best first:
     1. the name on the shirt (or from the roster),
     2. the shirt number,
-    3. the shirt colour.
+    3. the shirt colour (the team's colour, so every player of a team is
+       called the same, e.g. "লাল জার্সির খেলোয়াড়").
 
 Templates in dataset.json use {minute}, {jersey} and {player}. A template
 is only used if every slot it needs can be filled: with a name and a
@@ -51,13 +52,15 @@ def describe(identity, team_info=None):
     """Return the best available way to name a player.
 
     identity: {"name", "jersey_number"} (either may be empty).
-    team_info: {"shirt_colour"} from identify_teams.py.
+    team_info: {"team_colour", "shirt_colour"} from identify_teams.py.
     """
     identity = identity or {}
     team_info = team_info or {}
     name = identity.get("name") or None
     number = identity.get("jersey_number") or None
-    colour = team_info.get("shirt_colour") or None
+    colour = (
+        team_info.get("team_colour") or team_info.get("shirt_colour") or None
+    )
 
     if name:
         level = "name"
@@ -92,6 +95,12 @@ def fill_template(templates, minute, who, rng=random):
         jersey=who["jersey"] or "",
         player=who["player"],
     )
+
+
+def video_time(seconds):
+    """Seconds into the video as m:ss.s, e.g. 82.24 -> "1:22.2"."""
+    minutes, rest = divmod(float(seconds), 60)
+    return f"{int(minutes)}:{rest:04.1f}"
 
 
 def load_by_track(path):
@@ -137,8 +146,17 @@ def main():
     }
 
     rng = random.Random(args.seed)
+    print("video time  match min  event        player  commentary")
     for event, line in commentary(events, identities, teams, templates, rng):
-        print(f"{event['minute']:>3}' {event['type']:<12} {line or '-'}")
+        role = MAIN_ROLE.get(event["type"])
+        main = next(
+            (p for p in event["players"] if p["role"] == role), None
+        )
+        player = f"P{main['track_id']}" if main else "-"
+        print(
+            f"{video_time(event['time']):>10}  {event['minute']:>8}'  "
+            f"{event['type']:<12} {player:<7} {line or '-'}"
+        )
 
 
 if __name__ == "__main__":

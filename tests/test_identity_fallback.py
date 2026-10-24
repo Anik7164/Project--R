@@ -5,7 +5,7 @@ from pathlib import Path
 import numpy as np
 
 from jersey_reading import apply_roster, parse_name, parse_number, read_player, vote
-from player_identity import commentary, describe, fill_template
+from player_identity import commentary, describe, fill_template, video_time
 
 DATASET = json.loads((Path(__file__).resolve().parent.parent / "dataset.json").read_text(encoding="utf-8"))
 TEMPLATES = {item["event_type"]: item["templates"] for item in DATASET}
@@ -84,3 +84,13 @@ def test_commentary_names_the_right_player():
     teams = {3: {"shirt_colour": "blue"}}
     [(_, line)] = commentary(events, identities, teams, TEMPLATES, random.Random(1))
     assert "৪ নম্বর জার্সির খেলোয়াড়" in line
+
+
+def test_team_colour_wins_over_own_crop_colour():
+    who = describe({}, {"shirt_colour": "orange", "team_colour": "red"})
+    assert who["player"] == "লাল জার্সির খেলোয়াড়"
+
+
+def test_video_time_format():
+    assert video_time(82.24) == "1:22.2"
+    assert video_time(5) == "0:05.0"

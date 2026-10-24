@@ -140,6 +140,30 @@ def test_never_merges_two_players_seen_together():
     assert len(set(assignments)) == 2
 
 
+def _kit(index):
+    feat = np.full(10, 0.02)
+    feat[index] = 0.82
+    return feat
+
+
+def test_ids_swapped_by_tracker_during_contact_are_swapped_back():
+    manager = IdentityManager()
+    red, blue = _kit(0), _kit(5)
+    a = np.array([100.0, 100.0, 120.0, 150.0])
+    b = np.array([140.0, 100.0, 160.0, 150.0])
+    for f in range(10):
+        ids, _ = manager.update(f, [1, 2], [a, b], [red, blue])
+    red_id, blue_id = ids
+    # They run into each other: no clean view while the boxes overlap.
+    mid = np.array([120.0, 100.0, 140.0, 150.0])
+    for f in range(10, 15):
+        manager.update(f, [1, 2], [mid, mid + 4], [None, None])
+    # BoT-SORT comes out of the contact with the two IDs swapped.
+    for f in range(15, 20):
+        ids, _ = manager.update(f, [1, 2], [b, a], [blue, red])
+    assert ids == [blue_id, red_id]
+
+
 def test_simulated_broadcast_ids_are_stable_and_pure():
     rows = run_pipeline(frames=900, seed=1)
     raw = identity_stats(rows, column=2)

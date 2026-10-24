@@ -5,7 +5,12 @@ Reads the tracks written by track_players.py, looks at the players' kit
 colours and writes one row per stable player ID:
 
     outputs/tracking/<name>_teams.csv
-        track_id, team, role, confidence, shirt_colour, shirt_colour_bn
+        track_id, team, role, confidence, shirt_colour, shirt_colour_bn,
+        team_colour, team_colour_bn
+
+shirt_colour is read from this ID's own crops and can be off (shadows,
+skin, a bad crop); team_colour is the colour of the whole team, used by
+the commentary. For goalkeepers and referees both are their own colour.
 
 Usage:
     python src/identify_teams.py --video data/videos/test1.mp4
@@ -112,6 +117,12 @@ def identify_teams(samples):
         colour = shirt_colour_name(sum(own) / len(own)) if own else None
         decision["shirt_colour"] = colour
         decision["shirt_colour_bn"] = BENGALI_COLOUR_NAMES.get(colour)
+        if decision["role"] == "player" and decision["team"]:
+            team_colour = classifier.colours.get(decision["team"])
+        else:
+            team_colour = colour
+        decision["team_colour"] = team_colour
+        decision["team_colour_bn"] = BENGALI_COLOUR_NAMES.get(team_colour)
     return classifier, decisions
 
 
@@ -137,13 +148,14 @@ def main():
         writer = csv.writer(file)
         writer.writerow([
             "track_id", "team", "role", "confidence",
-            "shirt_colour", "shirt_colour_bn",
+            "shirt_colour", "shirt_colour_bn", "team_colour", "team_colour_bn",
         ])
         for player_id in sorted(decisions):
             d = decisions[player_id]
             writer.writerow([
                 player_id, d["team"] or "", d["role"], d["confidence"],
                 d["shirt_colour"] or "", d["shirt_colour_bn"] or "",
+                d["team_colour"] or "", d["team_colour_bn"] or "",
             ])
 
     roles = defaultdict(int)

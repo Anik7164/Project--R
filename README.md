@@ -54,6 +54,7 @@ BoT-SORT alone gives a player a new ID whenever it loses them: occlusion, leavin
 * **Camera motion** (`src/camera_motion.py`): the pan/zoom between frames is estimated from the background, so a player who left the view is still expected at the right place in current-frame pixels when they come back.
 * **Scene cuts** (replays, close-ups, cuts between two wide cameras, dissolves) are detected; positions from before a cut are not trusted after it.
 * **Re-linking**: a new BoT-SORT ID is pending for 3 frames, then matched to a currently missing player by position (gate grows with time missing) and shirt/shorts colour, or given a new ID. When only colour is available (after a cut, or missing for over ~2 s), ambiguous links between teammates are refused: a new ID is safer than a wrong one.
+* **Players running into each other**: BoT-SORT sometimes swaps two IDs, or carries one onto the other player, when players cross. A player's colour model is frozen while the view disagrees with it; once two players of different kits separate, an ID that now shows the other player is handed back (or the two are exchanged); and a team colour model, fitted while the video runs, releases an ID whose player suddenly wears the other team's shirt and never re-links a player to someone of the other team. Two teammates who swap cannot be told apart by colour; that needs the shirt number.
 * **Duplicates**: a partial-body box inside a bigger box of the same player is dropped.
 * **Not players**: people whose feet are not on grass (crowd, staff, faces in close-ups) are left out.
 

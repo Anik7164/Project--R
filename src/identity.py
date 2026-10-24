@@ -20,10 +20,21 @@ re-linked to a player who is currently missing or given a new player ID:
   (e.g. teammates) no link is made, because a wrong link is worse than a
   new ID.
 
+When players run into each other BoT-SORT sometimes swaps their IDs or
+carries an ID onto the other player. Three checks catch that:
+
+* A player's colour model is frozen while the view disagrees with it.
+* After two players touch, an ID whose view looks clearly more like the
+  other player is handed back (or the two IDs are exchanged).
+* A team colour model is fitted online; an ID whose player suddenly
+  wears the other team's shirt is released, and pending IDs are never
+  linked to a player of the other team.
+
 It also drops boxes that duplicate a bigger box in the same frame (a
 partial-body second detection of the same player).
 """
 
+from collections import Counter
 from dataclasses import dataclass, field
 
 import numpy as np
@@ -31,6 +42,7 @@ from scipy.optimize import linear_sum_assignment
 
 from appearance import blend, descriptor_distance, extract_descriptor, on_pitch
 from camera_motion import CameraMotionEstimator, warp_box
+from team_identification import TEAM_LABELS, TeamClassifier
 
 
 @dataclass
@@ -89,7 +101,32 @@ class IdentityConfig:
     # A bound BoT-SORT ID whose appearance stops matching its player for
     # this many frames in a row is treated as an ID switch and re-linked.
     switch_distance: float = 0.6
-    switch_patience: int = 5
+    switch_patience: int = 3
+
+    # After two players touch, BoT-SORT often swaps their IDs. For this
+    # many frames after the contact, a player whose view matches the other
+    # player better (by contact_margin) is swapped back at once.
+    contact_window: int = 50
+    contact_margin: float = 0.1
+    contact_patience: int = 2
+    # Only for players whose colours differ this much (different kits);
+    # two teammates look alike and colour cannot tell them apart.
+    contact_min_difference: float = 0.4
+
+    # Online team colours: fitted once this many clean views are collected,
+    # refitted every team_refit_frames on the latest team_buffer views.
+    team_check: bool = True
+    team_warmup: int = 150
+    team_refit_frames: int = 250
+    team_buffer: int = 3000
+    # A player's team is known after this many votes with this share.
+    team_min_votes: int = 3
+    team_min_share: float = 0.75
+    # Clean views in a row showing the other team before an ID is released.
+    team_switch_patience: int = 3
+    # A view counts for a team only if it is this much closer to that
+    # team's colour than to the other (goalkeepers fit neither well).
+    team_ratio: float = 0.8
 
     # Boxes covered by another box beyond this fraction get no
     # appearance update.
@@ -115,6 +152,18 @@ class Player:
     velocity: np.ndarray = field(default_factory=lambda: np.zeros(2))
     hits: int = 1
     mismatches: int = 0
+    # Other player ID -> last frame the two boxes touched.
+    contacts: dict = field(default_factory=dict)
+    swap_votes: dict = field(default_factory=dict)
+    team_votes: Counter = field(default_factory=Counter)
+    wrong_team: int = 0
+
+    def team(self, min_votes, min_share):
+        total = sum(self.team_votes.values())
+        if total < min_votes:
+            return None
+        label, count = self.team_votes.most_common(1)[0]
+        return label if count >= min_share * total else None
 
 
 @dataclass
@@ -125,7 +174,15 @@ class Pending:
     last_frame: int
     scene: int
     features: list = field(default_factory=list)
+    teams: list = field(default_factory=list)
     hits: int = 0
+
+    def team(self):
+        votes = Counter(t for t in self.teams if t in TEAM_LABELS)
+        if not votes:
+            return None
+        label, count = votes.most_common(1)[0]
+        return label if count > sum(votes.values()) / 2 else None
 
     def mean_feature(self):
         feats = [f for f in self.features if f is not None]
@@ -176,6 +233,15 @@ def find_duplicates(boxes, confidences, containment=0.9, area_ratio=0.6):
     return drop
 
 
+def _touching(a, b, slack=0.1):
+    """True if two boxes overlap or nearly do (slack in box heights)."""
+    pad = slack * min(_height(a), _height(b))
+    return (
+        a[0] - pad < b[2] and b[0] - pad < a[2]
+        and a[1] - pad < b[3] and b[1] - pad < a[3]
+    )
+
+
 def overlaps_other(index, boxes, limit):
     """True if more than `limit` of boxes[index] is covered by another box."""
     box = boxes[index]
@@ -202,13 +268,17 @@ class IdentityManager:
         self.scene = 0
         self.frame = -1
         self.frame_size = None
+        self.teams = TeamClassifier()
+        self.team_samples = []
+        self.team_fitted_at = None
+        self.touching = set()
 
     # ------------------------------------------------------------------
     # Public API
     # ------------------------------------------------------------------
 
     def update(self, frame_index, tracker_ids, boxes, features,
-               warp=None, scene_cut=False, frame_size=None):
+               warp=None, scene_cut=False, frame_size=None, others=()):
         """Process one frame.
 
         Args:
@@ -220,6 +290,9 @@ class IdentityManager:
             scene_cut: True if this frame starts a new shot.
             frame_size: (width, height) of the frame, enables the border
                 rule for players entering the view.
+            others: boxes of other people in the frame that are not
+                tracked (dropped duplicates, spectators); a player touching
+                one is not a clean view.
 
         Returns:
             (assignments, resolved)
@@ -242,20 +315,28 @@ class IdentityManager:
 
         assignments = [None] * len(boxes)
         seen_tracker_ids = set()
+        teams = self._predict_teams(features)
+        self._record_contacts(tracker_ids, boxes, others)
+        self._fix_swaps(tracker_ids, features)
 
-        for index, (tid, box, feat) in enumerate(
-            zip(tracker_ids, boxes, features)
+        for index, (tid, box, feat, team) in enumerate(
+            zip(tracker_ids, boxes, features, teams)
         ):
             tid = int(tid)
             seen_tracker_ids.add(tid)
             player_id = self.bindings.get(tid)
 
-            if player_id is not None and self._is_switch(player_id, feat):
+            if player_id is not None and (
+                self._is_switch(player_id, feat)
+                or self._changed_team(player_id, team)
+            ):
                 del self.bindings[tid]
                 player_id = None
 
             if player_id is not None:
                 self._update_player(self.players[player_id], box, feat)
+                if team is not None:
+                    self.players[player_id].team_votes[team] += 1
                 assignments[index] = player_id
                 continue
 
@@ -269,6 +350,7 @@ class IdentityManager:
             pending.box = box
             pending.last_frame = frame_index
             pending.features.append(feat)
+            pending.teams.append(team)
             pending.hits += 1
 
         resolved = self._resolve_pending(seen_tracker_ids)
@@ -309,6 +391,162 @@ class IdentityManager:
             pending.first_box = warp_box(pending.first_box, warp)
             pending.box = warp_box(pending.box, warp)
 
+    def _predict_teams(self, features):
+        """Team label per detection (None without a clean view or before
+        the team colours are known)."""
+        cfg = self.config
+        if not cfg.team_check:
+            return [None] * len(features)
+        clean = [f for f in features if f is not None]
+        self.team_samples.extend(clean)
+        del self.team_samples[:-cfg.team_buffer]
+        due = (
+            self.team_fitted_at is None
+            and len(self.team_samples) >= cfg.team_warmup
+        ) or (
+            self.team_fitted_at is not None
+            and self.frame - self.team_fitted_at >= cfg.team_refit_frames
+        )
+        if due:
+            self._fit_teams()
+        if not self.teams.fitted:
+            return [None] * len(features)
+        return [self._team_of(f) for f in features]
+
+    def _team_of(self, feature):
+        label, _ = self.teams.predict(feature)
+        if label not in TEAM_LABELS:
+            return label
+        point = np.sqrt(np.asarray(feature, dtype=np.float32))
+        near, far = sorted(np.linalg.norm(self.teams.centres - point, axis=1))
+        return label if near < self.config.team_ratio * far else None
+
+    def _fit_teams(self):
+        old = self.teams
+        new = TeamClassifier().fit(self.team_samples)
+        if old.fitted:
+            # Keep team_a / team_b meaning the same shirts after a refit.
+            straight = (np.linalg.norm(old.centres - new.centres, axis=1)
+                        .sum())
+            crossed = (np.linalg.norm(old.centres - new.centres[::-1],
+                                      axis=1).sum())
+            if crossed < straight:
+                new.centres = new.centres[::-1].copy()
+        self.teams = new
+        self.team_fitted_at = self.frame
+
+    def _changed_team(self, player_id, team):
+        """True once a bound ID has shown the other team's shirt for
+        team_switch_patience clean views in a row."""
+        cfg = self.config
+        player = self.players[player_id]
+        known = player.team(cfg.team_min_votes, cfg.team_min_share)
+        if team not in TEAM_LABELS or known not in TEAM_LABELS:
+            return False
+        if team == known:
+            player.wrong_team = 0
+            return False
+        player.wrong_team += 1
+        if player.wrong_team >= cfg.team_switch_patience:
+            player.wrong_team = 0
+            return True
+        return False
+
+    def _record_contacts(self, tracker_ids, boxes, others=()):
+        """Remember which players touch, and which IDs touch anyone now."""
+        self.touching = set()
+        tids = [int(t) for t in tracker_ids]
+        for tid, box in zip(tids, boxes):
+            if any(_touching(box, other) for other in others):
+                self.touching.add(tid)
+        for i in range(len(boxes)):
+            for j in range(i + 1, len(boxes)):
+                if not _touching(boxes[i], boxes[j]):
+                    continue
+                self.touching.update((tids[i], tids[j]))
+                pa = self.bindings.get(tids[i])
+                pb = self.bindings.get(tids[j])
+                if pa is not None and pb is not None:
+                    self.players[pa].contacts[pb] = self.frame
+                    self.players[pb].contacts[pa] = self.frame
+
+    def _fix_swaps(self, tracker_ids, features):
+        """Undo BoT-SORT ID swaps between players who just touched.
+
+        A tracker ID whose clean view looks clearly more like a player it
+        recently touched than like its own player is handed to that
+        player. If that player's tracker ID shows our player, the two are
+        exchanged; if that player is not in view, ours goes missing and
+        is re-linked later.
+        """
+        cfg = self.config
+        # Only views well apart from everyone else: a box that still
+        # touches another player shows part of their shirt too.
+        view = {
+            int(t): f for t, f in zip(tracker_ids, features)
+            if f is not None and int(t) in self.bindings
+            and int(t) not in self.touching
+        }
+        tid_of = {pid: tid for tid, pid in self.bindings.items()}
+        visible = {self.bindings[int(t)] for t in tracker_ids
+                   if int(t) in self.bindings}
+        moves = {}
+        for tid, feat in view.items():
+            pid = self.bindings[tid]
+            player = self.players[pid]
+            if player.feature is None:
+                continue
+            own = descriptor_distance(player.feature, feat)
+            best, best_dist = None, None
+            for other, when in list(player.contacts.items()):
+                if self.frame - when > cfg.contact_window:
+                    del player.contacts[other]
+                    continue
+                other_player = self.players.get(other)
+                if other_player is None or other_player.feature is None:
+                    continue
+                if descriptor_distance(
+                    player.feature, other_player.feature
+                ) < cfg.contact_min_difference:
+                    continue
+                d = descriptor_distance(other_player.feature, feat)
+                if d + cfg.contact_margin < own and (
+                    best is None or d < best_dist
+                ):
+                    best, best_dist = other, d
+            if best is None:
+                player.swap_votes.clear()
+                continue
+            votes = player.swap_votes
+            votes[best] = votes.get(best, 0) + 1
+            for other in [o for o in votes if o != best]:
+                del votes[other]
+            if votes[best] >= cfg.contact_patience:
+                moves[tid] = best
+
+        done = set()
+        for tid, target in moves.items():
+            pid = self.bindings.get(tid)
+            if tid in done or pid is None or target == pid:
+                continue
+            other_tid = tid_of.get(target)
+            if other_tid is not None and moves.get(other_tid) == pid:
+                # Clean swap: exchange the two IDs.
+                self.bindings[tid], self.bindings[other_tid] = target, pid
+                done.update((tid, other_tid))
+            elif target not in visible:
+                # The other player is out of view or merged into one box:
+                # this ID shows them now, ours is missing.
+                if other_tid is not None:
+                    del self.bindings[other_tid]
+                self.bindings[tid] = target
+                done.add(tid)
+            else:
+                continue
+            for p in (pid, target):
+                self.players[p].swap_votes.clear()
+                self.players[p].mismatches = 0
+
     def _is_switch(self, player_id, feature):
         player = self.players[player_id]
         if feature is None or player.feature is None:
@@ -330,9 +568,12 @@ class IdentityManager:
         else:
             player.velocity = np.zeros(2)
         player.box = box
-        player.feature = blend(
-            player.feature, feature, self.config.feature_momentum
-        )
+        # Keep the colour model frozen while the view disagrees with it,
+        # otherwise a swapped-in player slowly becomes "the same" player.
+        if player.mismatches == 0 and not player.swap_votes:
+            player.feature = blend(
+                player.feature, feature, self.config.feature_momentum
+            )
         player.last_frame = self.frame
         player.scene = self.scene
         player.hits += 1
@@ -345,6 +586,7 @@ class IdentityManager:
             last_frame=pending.last_frame,
             scene=self.scene,
             hits=pending.hits,
+            team_votes=Counter(t for t in pending.teams if t),
         )
         self.players[player.player_id] = player
         self.next_player_id += 1
@@ -405,6 +647,7 @@ class IdentityManager:
                 player.scene = pending.scene
                 player.velocity = np.zeros(2)
                 player.hits += pending.hits
+                player.team_votes.update(t for t in pending.teams if t)
             self.bindings[tid] = player.player_id
             resolved[tid] = player.player_id
 
@@ -424,9 +667,13 @@ class IdentityManager:
         for i, tid in enumerate(pending_ids):
             pending = self.pending[tid]
             feature = pending.mean_feature()
+            team = pending.team()
             for j, player in enumerate(candidates):
                 # Seen together in one frame means two different people.
                 if player.last_frame >= pending.first_frame:
+                    continue
+                known = player.team(cfg.team_min_votes, cfg.team_min_share)
+                if known in TEAM_LABELS and team and team != known:
                     continue
                 gap = pending.first_frame - player.last_frame
                 gaps[i, j] = gap
@@ -549,14 +796,15 @@ class StablePlayerTracker:
         # close-ups, not players.
         if cfg.require_on_pitch:
             keep = [i for i in keep if on_pitch(frame, boxes[i])]
-        # A box that overlaps another one mixes two players' colours;
-        # leave it out of the appearance model.
-        kept_boxes = [boxes[i] for i in keep]
+        # A box that overlaps another one (any detection, also a dropped
+        # duplicate) mixes two players' colours; leave it out of the
+        # appearance model.
         features = [
-            None if overlaps_other(index, kept_boxes, cfg.overlap_limit)
+            None if overlaps_other(i, boxes, cfg.overlap_limit)
             else extract_descriptor(frame, boxes[i])
-            for index, i in enumerate(keep)
+            for i in keep
         ]
+        kept = set(keep)
 
         assignments, resolved = self.identity.update(
             frame_index,
@@ -566,6 +814,7 @@ class StablePlayerTracker:
             warp=warp,
             scene_cut=cut,
             frame_size=(frame.shape[1], frame.shape[0]),
+            others=[boxes[i] for i in range(len(boxes)) if i not in kept],
         )
         return keep, assignments, resolved
 
