@@ -59,3 +59,11 @@ BoT-SORT alone gives a player a new ID whenever it loses them: occlusion, leavin
 `outputs/tracking/test1_tracks.csv` keeps both IDs: `track_id` (stable) and `tracker_id` (raw BoT-SORT), so `evaluate_tracking.py` can compare them on any clip. With MOTChallenge ground truth (for example SoccerNet tracking) add `--gt gt.txt` for IDF1/MOTA (`pip install motmetrics`).
 
 Tests run on a synthetic broadcast clip (panning camera, cuts, occlusions): `pip install pytest && python -m pytest tests`.
+
+### Teams
+
+```bash
+python src/identify_teams.py --video data/videos/test1.mp4
+```
+
+Writes `outputs/tracking/test1_teams.csv`: for every stable player ID its `team` (`team_a`/`team_b`), `role` (`player`, `goalkeeper`, `referee`) and shirt colour in English and Bengali. The teams are the two big kit-colour clusters; goalkeepers and referees fit neither. A goalkeeper is almost always the last person at one end of play and joins the nearer team (the two goalkeeper kits always go to different teams); a referee stays in the middle of play.

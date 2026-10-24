@@ -21,7 +21,7 @@ from collections import Counter, defaultdict
 import cv2
 import numpy as np
 
-from appearance import shirt_colour_name
+from appearance import descriptor_distance, shirt_colour_name
 
 TEAM_LABELS = ("team_a", "team_b")
 
@@ -36,6 +36,8 @@ OTHER_VOTE_SHARE = 0.5
 # person in at least this share of the frames they appear in with
 # others; a referee follows play from the middle.
 GOALKEEPER_EDGE_SHARE = 0.7
+# Goalkeeper IDs closer than this in colour wear the same kit.
+SAME_KIT_DISTANCE = 0.3
 
 
 def _embed(descriptors):
@@ -121,9 +123,11 @@ class TeamVotes:
         # each frame, and which team is nearer horizontally.
         self.at_edge = defaultdict(list)
         self.nearer_team = defaultdict(Counter)
+        self.outlier_colour = {}
 
-    def add_frame(self, player_ids, boxes, labels):
-        """Record one frame: stable player IDs, their boxes and box labels."""
+    def add_frame(self, player_ids, boxes, labels, descriptors=None):
+        """Record one frame: stable player IDs, their boxes, box labels and
+        (optionally) descriptors, used to tell the two goalkeepers apart."""
         centres_x = [(b[0] + b[2]) / 2.0 for b in boxes]
         order = np.argsort(np.argsort(centres_x))
         last = len(boxes) - 1
@@ -140,6 +144,12 @@ class TeamVotes:
             self.votes[player_id][label] += 1
             if label != "other":
                 continue
+            if descriptors is not None and descriptors[index] is not None:
+                old = self.outlier_colour.get(player_id)
+                self.outlier_colour[player_id] = (
+                    descriptors[index] if old is None
+                    else 0.9 * old + 0.1 * descriptors[index]
+                )
             if len(boxes) >= 3:
                 self.at_edge[player_id].append(order[index] in (0, last))
             if len(team_mean) == 2:
@@ -185,4 +195,42 @@ class TeamVotes:
                     "role": "referee",
                     "confidence": round(other_share, 3),
                 }
+        self._separate_goalkeepers(decisions)
         return decisions
+
+    def _separate_goalkeepers(self, decisions):
+        """The two goalkeeper kits belong to different teams.
+
+        One goalkeeper can have several IDs, so group them by kit colour.
+        If both kits ended up in one team, move the kit with the weaker
+        team vote to the other team.
+        """
+        kits = []  # [(colour, [player_ids])]
+        for player_id, decision in decisions.items():
+            colour = self.outlier_colour.get(player_id)
+            if decision["role"] != "goalkeeper" or colour is None:
+                continue
+            for kit_colour, members in kits:
+                if descriptor_distance(kit_colour, colour) < SAME_KIT_DISTANCE:
+                    members.append(player_id)
+                    break
+            else:
+                kits.append((colour, [player_id]))
+        if len(kits) != 2:
+            return
+
+        def team_votes(members):
+            votes = Counter()
+            for player_id in members:
+                votes.update(self.nearer_team[player_id])
+            return votes
+
+        votes = [team_votes(members) for _, members in kits]
+        teams = [v.most_common(1)[0][0] for v in votes]
+        if teams[0] != teams[1]:
+            return
+        margins = [v[teams[0]] / max(1, sum(v.values())) for v in votes]
+        weaker = int(np.argmin(margins))
+        other_team = next(t for t in TEAM_LABELS if t != teams[0])
+        for player_id in kits[weaker][1]:
+            decisions[player_id]["team"] = other_team

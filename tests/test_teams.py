@@ -1,12 +1,11 @@
 from collections import defaultdict
 
+import pytest
+
 from appearance import extract_descriptor, shirt_colour_name
 from broadcast_sim import KITS, simulate
 from identity import overlaps_other
 from team_identification import TeamClassifier, TeamVotes
-
-ROLES = {}
-
 
 def sim_samples(frames=900, seed=3, step=5):
     """Per-frame (true player IDs, boxes, descriptors) from the simulator."""
@@ -36,12 +35,15 @@ def role_of(player_id):
     return "referee"
 
 
-def test_teams_goalkeepers_and_referee():
-    samples = sim_samples()
+@pytest.mark.parametrize("seed", [0, 3, 4, 7])
+def test_teams_goalkeepers_and_referee(seed):
+    samples = sim_samples(seed=seed)
     classifier = TeamClassifier().fit([d for _, _, ds in samples for d in ds])
     votes = TeamVotes()
     for ids, boxes, descriptors in samples:
-        votes.add_frame(ids, boxes, [classifier.predict(d)[0] for d in descriptors])
+        votes.add_frame(
+            ids, boxes, [classifier.predict(d)[0] for d in descriptors], descriptors
+        )
     decisions = votes.decide()
 
     team_of_role = defaultdict(set)

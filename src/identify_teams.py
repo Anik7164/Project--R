@@ -101,7 +101,7 @@ def identify_teams(samples):
 
     for player_ids, boxes, descriptors in samples:
         labels = [classifier.predict(d)[0] for d in descriptors]
-        votes.add_frame(player_ids, boxes, labels)
+        votes.add_frame(player_ids, boxes, labels, descriptors)
         for player_id, descriptor in zip(player_ids, descriptors):
             if descriptor is not None:
                 player_descriptors[player_id].append(descriptor)
