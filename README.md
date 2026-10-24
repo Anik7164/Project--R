@@ -79,3 +79,14 @@ python src/match_events.py  --video data/videos/test1.mp4 [--spotting results_sp
 
 * With `--spotting` the event types and times come from a SoccerNet action-spotting model's `results_spotting.json` (goal, foul, yellow/red card, corner, free kick, goal kick, penalty).
 * Without it, simple rules are used: a yellow/red rectangle above the referee's head is a card, a ball that stood still and is then played is a set piece (a goal kick when the goalkeeper takes it), and a free kick implies a foul by the opponent nearest the fouled player. Goals need the spotting model.
+
+### Who is who: name → number → colour
+
+```bash
+pip install easyocr
+python src/extract_jersey_crops.py
+python src/jersey_reading.py   --video data/videos/test1.mp4 [--roster roster.json]
+python src/player_identity.py  --video data/videos/test1.mp4
+```
+
+`jersey_reading.py` reads the name and number on each player's shirt from their best torso crops; a value is only accepted when at least two crops agree. With a roster (`{"team_a": {"7": "Rashford"}, ...}`) a read number becomes the player's name and a misread name snaps to the closest roster name. `player_identity.py` then fills the Bengali templates in `dataset.json` for every event, naming each player by the best thing we know: their name, else "৭ নম্বর জার্সির খেলোয়াড়", else "লাল জার্সির খেলোয়াড়". Templates with a `{jersey}` slot are only used when both name and number are known.

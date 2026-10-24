@@ -21,8 +21,9 @@ TRACKS_CSV = ROOT / "outputs" / "tracking" / "test1_tracks.csv"
 OUTPUT_DIR = ROOT / "outputs" / "jersey_crops"
 REVIEW_CSV = OUTPUT_DIR / "jersey_crop_review.csv"
 
-# Keep several candidates per track.
-MAX_CROPS_PER_TRACK = 3
+# Keep several candidates per track; jersey_reading.py needs at least
+# two crops to agree before it trusts a name or number.
+MAX_CROPS_PER_TRACK = 6
 
 # Avoid selecting nearly identical neighboring frames.
 MIN_FRAME_GAP = 15
