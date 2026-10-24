@@ -67,3 +67,15 @@ python src/identify_teams.py --video data/videos/test1.mp4
 ```
 
 Writes `outputs/tracking/test1_teams.csv`: for every stable player ID its `team` (`team_a`/`team_b`), `role` (`player`, `goalkeeper`, `referee`) and shirt colour in English and Bengali. The teams are the two big kit-colour clusters; goalkeepers and referees fit neither. A goalkeeper is almost always the last person at one end of play and joins the nearer team (the two goalkeeper kits always go to different teams); a referee stays in the middle of play.
+
+### Ball and match events
+
+```bash
+python src/ball_tracking.py --video data/videos/test1.mp4
+python src/match_events.py  --video data/videos/test1.mp4 [--spotting results_spotting.json] [--start-minute 0]
+```
+
+`ball_tracking.py` keeps the YOLO "sports ball" detection that continues the ball's path (camera motion removed) and fills short gaps. `match_events.py` writes `outputs/tracking/test1_events.json` with each event's minute, type (names from `dataset.json`) and the players involved (scorer/assist, fouler/fouled, booked player, set-piece taker), using ball possession from the tracks:
+
+* With `--spotting` the event types and times come from a SoccerNet action-spotting model's `results_spotting.json` (goal, foul, yellow/red card, corner, free kick, goal kick, penalty).
+* Without it, simple rules are used: a yellow/red rectangle above the referee's head is a card, a ball that stood still and is then played is a set piece (a goal kick when the goalkeeper takes it), and a free kick implies a foul by the opponent nearest the fouled player. Goals need the spotting model.
