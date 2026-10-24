@@ -1,24 +1,52 @@
 
-from pathlib import Path
+"""
+Track players with BoT-SORT and give them stable player IDs.
+
+BoT-SORT track IDs break whenever a player is lost for a while: occlusion,
+leaving the view during a camera pan, or a broadcast cut. The identity
+layer in identity.py re-links those broken tracks so a player keeps the
+same ID while the camera moves.
+
+Outputs (in outputs/tracking/):
+    <name>_tracks.csv  one row per detection, in frame order.
+        track_id    stable player ID (use this one)
+        tracker_id  raw BoT-SORT ID, kept for comparison
+        scene       shot number; it increases at every detected cut
+    <name>_tracks_mot.txt  the same tracks in MOTChallenge format, for
+        evaluate_tracking.py and SoccerNet-style evaluation.
+    <name>_tracked.mp4  annotated video.
+
+Usage:
+    python src/track_players.py --video data/videos/test1.mp4
+"""
+
+import argparse
 import csv
+import os
+from collections import defaultdict, deque
+from pathlib import Path
 
 import cv2
+import numpy as np
 import torch
 from ultralytics import YOLO
 
+from identity import StablePlayerTracker
+
 ROOT = Path(__file__).resolve().parent.parent
 
-VIDEO_PATH = ROOT / "data" / "videos" / "test1.mp4"
-MODEL_PATH = Path(r"F:\AI_Models\Ultralytics\yolo26n.pt")
-TRACKER_CONFIG = ROOT / "botsort_custom.yaml"
-
+DEFAULT_VIDEO = ROOT / "data" / "videos" / "test1.mp4"
+# Override with --model or the YOLO_MODEL environment variable.
+DEFAULT_MODEL = Path(os.environ.get("YOLO_MODEL", ROOT / "yolo26n.pt"))
+DEFAULT_TRACKER = ROOT / "botsort_custom.yaml"
 OUTPUT_DIR = ROOT / "outputs" / "tracking"
-OUTPUT_VIDEO = OUTPUT_DIR / "test1_botsort_buffer90.mp4"
-OUTPUT_CSV = OUTPUT_DIR / "test1_botsort_buffer90_tracks.csv"
 
 # Detection settings
 CONFIDENCE = 0.35
 IMAGE_SIZE = 960
+# NMS IoU. Lower than the Ultralytics default (0.7) so two boxes on one
+# player are merged more often. Ignored by NMS-free models like YOLO26.
+NMS_IOU = 0.5
 
 # Conservative box validation: avoid rejecting distant players.
 MIN_BOX_WIDTH = 8
@@ -29,6 +57,17 @@ MAX_BOX_AREA_RATIO = 0.18
 
 # Optional diagnostic: rejected boxes are orange.
 SHOW_REJECTED = False
+
+CSV_HEADER = [
+    "frame",
+    "timestamp_seconds",
+    "track_id",
+    "tracker_id",
+    "class_name",
+    "confidence",
+    "x1", "y1", "x2", "y2",
+    "scene",
+]
 
 
 def validate_box(box, frame_width, frame_height):
@@ -78,25 +117,100 @@ def validate_box(box, frame_width, frame_height):
     return True, "accepted"
 
 
+def colour_for(player_id):
+    """A distinct, stable BGR colour per player ID."""
+    hue = (player_id * 47) % 180
+    hsv = np.uint8([[[hue, 200, 255]]])
+    return tuple(int(c) for c in cv2.cvtColor(hsv, cv2.COLOR_HSV2BGR)[0, 0])
+
+
+class OrderedTrackWriter:
+    """Writes rows in frame order while pending IDs wait to be resolved.
+
+    A new BoT-SORT ID is pending for a few frames before it gets a player
+    ID. Rows are held back until every ID in their frame is resolved.
+    """
+
+    def __init__(self, csv_writer, mot_file, delay):
+        self.csv_writer = csv_writer
+        self.mot_file = mot_file
+        self.delay = delay
+        self.frames = deque()
+        self.pending_rows = defaultdict(list)
+        self.rows_written = 0
+        self.player_ids = set()
+
+    def add_frame(self, frame_number, rows):
+        """rows: dicts with a 'track_id' that may be None (pending)."""
+        for row in rows:
+            if row["track_id"] is None:
+                self.pending_rows[row["tracker_id"]].append(row)
+        self.frames.append((frame_number, rows))
+        while self.frames and self.frames[0][0] < frame_number - self.delay:
+            self._write(*self.frames.popleft())
+
+    def resolve(self, resolved):
+        for tracker_id, player_id in resolved.items():
+            for row in self.pending_rows.pop(tracker_id, []):
+                # None means the ID was dropped as a false detection.
+                row["track_id"] = player_id if player_id is not None else -1
+
+    def close(self):
+        while self.frames:
+            self._write(*self.frames.popleft())
+
+    def _write(self, frame_number, rows):
+        for row in rows:
+            if row["track_id"] is None or row["track_id"] < 0:
+                continue
+            self.csv_writer.writerow([row[key] for key in CSV_HEADER])
+            x1, y1, x2, y2 = row["x1"], row["y1"], row["x2"], row["y2"]
+            self.mot_file.write(
+                f"{frame_number + 1},{row['track_id']},{x1},{y1},"
+                f"{x2 - x1},{y2 - y1},{row['confidence']},-1,-1,-1\n"
+            )
+            self.rows_written += 1
+            self.player_ids.add(row["track_id"])
+
+
+def parse_args():
+    parser = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
+    parser.add_argument("--video", type=Path, default=DEFAULT_VIDEO)
+    parser.add_argument("--model", type=Path, default=DEFAULT_MODEL)
+    parser.add_argument("--tracker", type=Path, default=DEFAULT_TRACKER)
+    parser.add_argument("--output-dir", type=Path, default=OUTPUT_DIR)
+    parser.add_argument(
+        "--no-video", action="store_true",
+        help="skip writing the annotated video (faster)",
+    )
+    return parser.parse_args()
+
+
 def main():
-    for path in (VIDEO_PATH, MODEL_PATH, TRACKER_CONFIG):
+    args = parse_args()
+
+    for path in (args.video, args.model, args.tracker):
         if not path.exists():
             raise FileNotFoundError(f"Required file not found: {path}")
 
-    OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
+    args.output_dir.mkdir(parents=True, exist_ok=True)
+    name = args.video.stem
+    output_video = args.output_dir / f"{name}_tracked.mp4"
+    output_csv = args.output_dir / f"{name}_tracks.csv"
+    output_mot = args.output_dir / f"{name}_tracks_mot.txt"
 
     device = 0 if torch.cuda.is_available() else "cpu"
 
     print("CUDA available:", torch.cuda.is_available())
     if torch.cuda.is_available():
         print("GPU:", torch.cuda.get_device_name(0))
-    print("Tracker:", TRACKER_CONFIG)
+    print("Tracker:", args.tracker)
 
-    model = YOLO(str(MODEL_PATH))
+    model = YOLO(str(args.model))
 
-    cap = cv2.VideoCapture(str(VIDEO_PATH))
+    cap = cv2.VideoCapture(str(args.video))
     if not cap.isOpened():
-        raise RuntimeError(f"Cannot open video: {VIDEO_PATH}")
+        raise RuntimeError(f"Cannot open video: {args.video}")
 
     fps = cap.get(cv2.CAP_PROP_FPS)
     if not fps or fps <= 0:
@@ -106,36 +220,32 @@ def main():
     frame_height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
     total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
 
-    writer = cv2.VideoWriter(
-        str(OUTPUT_VIDEO),
-        cv2.VideoWriter_fourcc(*"mp4v"),
-        fps,
-        (frame_width, frame_height),
-    )
+    writer = None
+    if not args.no_video:
+        writer = cv2.VideoWriter(
+            str(output_video),
+            cv2.VideoWriter_fourcc(*"mp4v"),
+            fps,
+            (frame_width, frame_height),
+        )
+        if not writer.isOpened():
+            cap.release()
+            raise RuntimeError(f"Cannot create output video: {output_video}")
 
-    if not writer.isOpened():
-        cap.release()
-        raise RuntimeError(f"Cannot create output video: {OUTPUT_VIDEO}")
+    stable = StablePlayerTracker()
+    delay = stable.identity.config.pending_timeout + 2
 
     frame_number = 0
-    rows_written = 0
     rejected = 0
-    seen_ids = set()
+    tracker_ids_seen = set()
     rejection_reasons = {}
 
     try:
-        with OUTPUT_CSV.open(
-            "w", newline="", encoding="utf-8"
-        ) as file:
+        with output_csv.open("w", newline="", encoding="utf-8") as file, \
+                output_mot.open("w", encoding="utf-8") as mot_file:
             csv_writer = csv.writer(file)
-            csv_writer.writerow([
-                "frame",
-                "timestamp_seconds",
-                "track_id",
-                "class_name",
-                "confidence",
-                "x1", "y1", "x2", "y2",
-            ])
+            csv_writer.writerow(CSV_HEADER)
+            track_writer = OrderedTrackWriter(csv_writer, mot_file, delay)
 
             while True:
                 success, frame = cap.read()
@@ -146,48 +256,39 @@ def main():
                 # persist=True preserves tracker state between frames.
                 results = model.track(
                     source=frame,
-                    tracker=str(TRACKER_CONFIG),
+                    tracker=str(args.tracker),
                     persist=True,
                     classes=[0],
                     conf=CONFIDENCE,
+                    iou=NMS_IOU,
                     imgsz=IMAGE_SIZE,
                     device=device,
                     verbose=False,
                 )
 
                 result = results[0]
-                annotated = frame.copy()
+                annotated = frame.copy() if writer else None
                 boxes = result.boxes
+                timestamp = frame_number / fps
 
+                detections = []
                 if boxes is not None and boxes.id is not None:
-                    coordinates = boxes.xyxy.cpu().tolist()
-                    ids = boxes.id.int().cpu().tolist()
-                    confidences = boxes.conf.cpu().tolist()
-                    class_ids = boxes.cls.int().cpu().tolist()
-
-                    timestamp = frame_number / fps
-
-                    for bbox, track_id, confidence, class_id in zip(
-                        coordinates, ids, confidences, class_ids
+                    for bbox, tracker_id, confidence, class_id in zip(
+                        boxes.xyxy.cpu().tolist(),
+                        boxes.id.int().cpu().tolist(),
+                        boxes.conf.cpu().tolist(),
+                        boxes.cls.int().cpu().tolist(),
                     ):
                         accepted, reason = validate_box(
                             bbox, frame_width, frame_height
                         )
-
-                        x1, y1, x2, y2 = map(int, bbox)
-
                         if not accepted:
                             rejected += 1
                             rejection_reasons[reason] = (
                                 rejection_reasons.get(reason, 0) + 1
                             )
-
-                            if SHOW_REJECTED:
-                                x1 = max(0, min(x1, frame_width - 1))
-                                y1 = max(0, min(y1, frame_height - 1))
-                                x2 = max(0, min(x2, frame_width - 1))
-                                y2 = max(0, min(y2, frame_height - 1))
-
+                            if SHOW_REJECTED and annotated is not None:
+                                x1, y1, x2, y2 = map(int, bbox)
                                 cv2.rectangle(
                                     annotated, (x1, y1), (x2, y2),
                                     (0, 165, 255), 2,
@@ -195,67 +296,97 @@ def main():
                             continue
 
                         # Clamp accepted coordinates to the image.
+                        x1, y1, x2, y2 = map(int, bbox)
                         x1 = max(0, min(x1, frame_width - 1))
                         y1 = max(0, min(y1, frame_height - 1))
                         x2 = max(0, min(x2, frame_width - 1))
                         y2 = max(0, min(y2, frame_height - 1))
-
                         if x2 <= x1 or y2 <= y1:
                             rejected += 1
                             continue
 
-                        track_id = int(track_id)
-                        confidence = float(confidence)
-                        class_id = int(class_id)
-                        seen_ids.add(track_id)
+                        detections.append((
+                            int(tracker_id), (x1, y1, x2, y2),
+                            float(confidence), int(class_id),
+                        ))
 
-                        csv_writer.writerow([
-                            frame_number,
-                            round(timestamp, 3),
-                            track_id,
-                            model.names[class_id],
-                            round(confidence, 4),
-                            x1, y1, x2, y2,
-                        ])
-                        rows_written += 1
+                keep, assignments, resolved = stable.process(
+                    frame_number,
+                    frame,
+                    [d[0] for d in detections],
+                    [d[1] for d in detections],
+                    [d[2] for d in detections],
+                )
 
-                        cv2.rectangle(
-                            annotated, (x1, y1), (x2, y2),
-                            (0, 255, 0), 2,
-                        )
+                rows = []
+                for index, player_id in zip(keep, assignments):
+                    tracker_id, (x1, y1, x2, y2), confidence, class_id = (
+                        detections[index]
+                    )
+                    tracker_ids_seen.add(tracker_id)
+                    rows.append({
+                        "frame": frame_number,
+                        "timestamp_seconds": round(timestamp, 3),
+                        "track_id": player_id,
+                        "tracker_id": tracker_id,
+                        "class_name": model.names[class_id],
+                        "confidence": round(confidence, 4),
+                        "x1": x1, "y1": y1, "x2": x2, "y2": y2,
+                        "scene": stable.identity.scene,
+                    })
+
+                    if annotated is not None:
+                        if player_id is None:
+                            colour, label = (160, 160, 160), "?"
+                        else:
+                            colour, label = colour_for(player_id), f"P{player_id}"
+                        cv2.rectangle(annotated, (x1, y1), (x2, y2), colour, 2)
                         cv2.putText(
-                            annotated,
-                            f"ID {track_id} {confidence:.2f}",
-                            (x1, max(20, y1 - 6)),
-                            cv2.FONT_HERSHEY_SIMPLEX,
-                            0.55,
-                            (0, 255, 0),
-                            2,
+                            annotated, label, (x1, max(20, y1 - 6)),
+                            cv2.FONT_HERSHEY_SIMPLEX, 0.55, colour, 2,
                         )
 
-                writer.write(annotated)
+                track_writer.resolve(resolved)
+                track_writer.add_frame(frame_number, rows)
+
+                if annotated is not None:
+                    if stable.last_cut:
+                        cv2.putText(
+                            annotated, "SCENE CUT", (20, 40),
+                            cv2.FONT_HERSHEY_SIMPLEX, 1.0, (0, 0, 255), 2,
+                        )
+                    writer.write(annotated)
                 frame_number += 1
 
                 if frame_number % 30 == 0:
                     print(
                         f"Processed {frame_number}/{total_frames} "
-                        f"| unique IDs: {len(seen_ids)} "
-                        f"| records: {rows_written} "
+                        f"| BoT-SORT IDs: {len(tracker_ids_seen)} "
+                        f"| player IDs: {stable.identity.next_player_id - 1} "
+                        f"| scenes: {stable.identity.scene} "
                         f"| rejected: {rejected}"
                     )
 
+            track_writer.resolve(stable.flush())
+            track_writer.close()
+
     finally:
         cap.release()
-        writer.release()
+        if writer is not None:
+            writer.release()
 
-    print("\nBoT-SORT tracking finished.")
+    print("\nTracking finished.")
     print("Frames processed:", frame_number)
-    print("Unique IDs observed:", len(seen_ids))
-    print("Detection records:", rows_written)
+    print("BoT-SORT IDs observed:", len(tracker_ids_seen))
+    print("Stable player IDs written:", len(track_writer.player_ids))
+    print("Scenes (shots):", stable.identity.scene)
+    print("Detection records:", track_writer.rows_written)
     print("Rejected boxes:", rejected)
     print("Rejection reasons:", rejection_reasons)
-    print("Video:", OUTPUT_VIDEO)
-    print("CSV:", OUTPUT_CSV)
+    if writer is not None:
+        print("Video:", output_video)
+    print("CSV:", output_csv)
+    print("MOT:", output_mot)
 
 
 if __name__ == "__main__":

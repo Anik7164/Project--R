@@ -9,6 +9,7 @@ import numpy as np
 ROOT = Path(__file__).resolve().parent.parent
 
 VIDEO_PATH = ROOT / "data" / "videos" / "test1.mp4"
+# Written by track_players.py; track_id is the stable player ID.
 TRACKS_CSV = ROOT / "outputs" / "tracking" / "test1_tracks.csv"
 OUTPUT_DIR = ROOT / "outputs" / "player_crops"
 REVIEW_CSV = OUTPUT_DIR / "crop_review.csv"
