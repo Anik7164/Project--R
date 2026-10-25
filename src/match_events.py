@@ -97,7 +97,19 @@ SOCCERNET_LABELS = {
     "Indirect free-kick": "freekick",
     "Clearance": "goal_kick",  # SoccerNet calls goal kicks "Clearance"
     "Penalty": "penalty",
+    "Offside": "offside",
+    "Shots off target": "missed_shot",
+    "Throw-in": "throw_in",
+    "Substitution": "substitution",
 }
+# Lowest model confidence kept, per event type (default SPOTTING_THRESHOLD).
+SPOTTING_THRESHOLD = 0.35
+SPOTTING_THRESHOLDS = {"missed_shot": 0.45, "throw_in": 0.5}
+# After a goal comes the celebration, replays and the kick-off: no set
+# piece or shot can happen in this many seconds.
+AFTER_GOAL_SECONDS = 20.0
+# Two spotted cards closer than this are one card.
+CARD_MERGE_SECONDS = 10.0
 
 
 @dataclass
@@ -174,10 +186,12 @@ def load_match(tracks_csv, teams_csv, ball_csv, fps):
                      team_colours=team_colours)
 
 
-def load_spotting(path, fps, half=1):
+def load_spotting(path, fps, half=1, threshold=None):
     """Read SoccerNet results_spotting JSON -> [(frame, type, confidence)].
 
     Only predictions for the given half are used; "position" is in ms.
+    With a threshold, predictions below it (or below the type's own
+    threshold in SPOTTING_THRESHOLDS, if higher) are dropped.
     """
     data = json.loads(Path(path).read_text(encoding="utf-8"))
     events = []
@@ -188,8 +202,48 @@ def load_spotting(path, fps, half=1):
         if int(item.get("half", half)) != half:
             continue
         frame = int(round(float(item["position"]) / 1000.0 * fps))
-        events.append((frame, event_type, float(item.get("confidence", 1.0))))
+        confidence = float(item.get("confidence", 1.0))
+        if threshold is not None and confidence < max(
+            threshold, SPOTTING_THRESHOLDS.get(event_type, 0.0)
+        ):
+            continue
+        events.append((frame, event_type, confidence))
     return sorted(events)
+
+
+def merge_cards(spotted, seen_cards, fps):
+    """Combine spotted cards with cards seen in the picture.
+
+    A model often spots one card twice and confuses yellow and red; a
+    card seen in the picture (card_detection) has the right colour and
+    time. Spotted cards within CARD_MERGE_SECONDS of each other are one
+    card; one near a seen card takes its colour and frame; seen cards the
+    model missed are added.
+    """
+    window = CARD_MERGE_SECONDS * fps
+    cards = sorted((f, t, c) for f, t, c in spotted if t.endswith("_card"))
+    others = [e for e in spotted if not e[1].endswith("_card")]
+    merged = []
+    for frame, card, confidence in cards:
+        if merged and frame - merged[-1][0] <= window:
+            if confidence > merged[-1][2]:
+                merged[-1] = (frame, card, confidence)
+            continue
+        merged.append((frame, card, confidence))
+    used = set()
+    result = []
+    for frame, card, confidence in merged:
+        near = [(abs(f - frame), i) for i, (f, _) in enumerate(seen_cards)
+                if abs(f - frame) <= window and i not in used]
+        if near:
+            _, i = min(near)
+            used.add(i)
+            frame, card = seen_cards[i]
+        result.append((frame, card, confidence))
+    for i, (frame, card) in enumerate(seen_cards):
+        if i not in used:
+            result.append((frame, card, 0.5))
+    return sorted(others + result)
 
 
 # ----------------------------------------------------------------------
@@ -357,7 +411,14 @@ def attribute(match, touches, event_type, frame, fouls=()):
                     break
         return [] if recipient is None else [_player(match, "booked", recipient)]
 
-    if event_type in ("corner_kick", "freekick", "goal_kick", "penalty"):
+    if event_type in ("missed_shot", "offside"):
+        # The player who last had the ball: the shooter, or the player
+        # caught offside as the pass reaches him.
+        around = touches_between(touches, frame - int(FOUL_WINDOW * fps), frame)
+        return [_player(match, "player", around[-1].track_id)] if around else []
+
+    if event_type in ("corner_kick", "freekick", "goal_kick", "penalty",
+                      "throw_in"):
         # The taker often stands over the ball before kicking it, so take
         # the first touch still going on as the ball is played.
         window = int(SET_PIECE_WINDOW * fps)
@@ -574,7 +635,14 @@ def main():
     parser.add_argument("--video", type=Path, required=True,
                         help="the match video; its name also locates the CSVs")
     parser.add_argument("--spotting", type=Path,
-                        help="SoccerNet results_spotting JSON")
+                        help="SoccerNet results_spotting JSON (default: "
+                             "<name>_spotting.json from action_spotting.py "
+                             "if it exists)")
+    parser.add_argument("--spotting-threshold", type=float,
+                        default=SPOTTING_THRESHOLD)
+    parser.add_argument("--rules", action="store_true",
+                        help="use the simple rules even if spotting results "
+                             "exist")
     parser.add_argument("--half", type=int, default=1)
     parser.add_argument("--fps", type=float, default=25.0)
     parser.add_argument("--start-minute", type=int, default=0,
@@ -592,10 +660,17 @@ def main():
         TRACKING_DIR / f"{name}_ball.csv",
         args.fps,
     )
-    if args.spotting:
-        spotted = load_spotting(args.spotting, args.fps, args.half)
+    spotting = args.spotting or TRACKING_DIR / f"{name}_spotting.json"
+    if not args.rules and spotting.exists():
+        print("Events from the SoccerNet model:", spotting)
+        spotted = load_spotting(spotting, args.fps, args.half,
+                                args.spotting_threshold)
+        spotted = merge_cards(spotted, find_cards(match, args.video,
+                                                  DEFAULT_MODEL), args.fps)
         events = events_from_spotting(match, spotted, args.start_minute)
     else:
+        print("No spotting results; using simple rules "
+              "(run action_spotting.py first for much better events)")
         events = events_from_rules(match, args.start_minute, args.video)
     if not args.no_scoreboard:
         goals = goals_from_scoreboard(
@@ -603,7 +678,15 @@ def main():
             args.start_minute,
         )
         if goals:
-            events = [e for e in events if e["type"] != "goal"] + goals
+            quiet = AFTER_GOAL_SECONDS * args.fps
+            events = [
+                e for e in events if e["type"] != "goal" and not (
+                    e["type"] in ("freekick", "corner_kick", "goal_kick",
+                                  "missed_shot", "throw_in", "offside")
+                    and any(0 < e["frame"] - g["frame"] <= quiet
+                            for g in goals)
+                )
+            ] + goals
             events.sort(key=lambda e: e["frame"])
 
     output = TRACKING_DIR / f"{name}_events.json"

@@ -81,10 +81,16 @@ Writes `outputs/tracking/test1_teams.csv`: for every stable player ID its `team`
 ### Ball and match events
 
 ```bash
-python src/ball_tracking.py --video data/videos/test1.mp4
-python src/match_events.py  --video data/videos/test1.mp4 [--spotting results_spotting.json] [--start-minute 0] [--start-score 0-0]
-python src/scoreboard.py    --video data/videos/test1.mp4   # optional: just list the goals
+pip install tensorflow                                        # once, for action_spotting.py
+python src/ball_tracking.py   --video data/videos/test1.mp4
+python src/action_spotting.py --video data/videos/test1.mp4  # trained SoccerNet event model
+python src/match_events.py    --video data/videos/test1.mp4 [--start-minute 0] [--start-score 0-0]
+python src/scoreboard.py      --video data/videos/test1.mp4  # optional: just list the goals
 ```
+
+`action_spotting.py` runs the trained SoccerNet-v2 **NetVLAD++** model (Giancola & Ghanem 2021, official weights from [sn-spotting](https://github.com/SoccerNet/sn-spotting), Apache-2.0). Two frames per second go through ResNet-152 exactly as SoccerNet's features were made; the model scores 17 event types for every half second from the 15 s around it, and the peaks are written to `outputs/tracking/test1_spotting.json`. Both models download once into `.cache/` (ResNet-152 ~240 MB, NetVLAD++ ~20 MB). On a CPU it takes about 1–2 minutes for the 2-minute test clip. `match_events.py` uses that file automatically when it exists (`--rules` forces the old rules).
+
+On test1.mp4 the model finds the corner after the 0:54 save, the foul at 1:28 and the card at 1:35; it misses both goals (highlights cut the build-up and celebration it was trained on), which the scoreboard covers. Cards it spots take their colour and time from the card seen in the picture (it called the 1:35 red card yellow), and set pieces in the 20 s after a goal (really the kick-off) are dropped.
 
 `ball_tracking.py` keeps the YOLO "sports ball" detection that continues the ball's path (camera motion removed) and fills short gaps. `match_events.py` writes `outputs/tracking/test1_events.json` with each event's minute, type (names from `dataset.json`) and the players involved (scorer/assist, fouler/fouled, booked player, set-piece taker), using ball possession from the tracks:
 

@@ -1,7 +1,7 @@
 """
 Keep every download and cache inside the project folder.
 
-By default PyTorch, Ultralytics, EasyOCR, Hugging Face, matplotlib and
+By default PyTorch, Ultralytics, EasyOCR, Keras, Hugging Face, matplotlib and
 temporary files go to the user's home or temp folder (on Windows, the C:
 drive). Importing this module first points all of them to
 <project>/.cache instead, so nothing is written outside the project
@@ -23,6 +23,7 @@ _LOCATIONS = {
     "XDG_CACHE_HOME": "xdg",
     "YOLO_CONFIG_DIR": "ultralytics",
     "EASYOCR_MODULE_PATH": "easyocr",
+    "KERAS_HOME": "keras",
     "MPLCONFIGDIR": "matplotlib",
     "PIP_CACHE_DIR": "pip",
     "TEMP": "tmp",

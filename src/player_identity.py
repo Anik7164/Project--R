@@ -42,6 +42,9 @@ MAIN_ROLE = {
     "corner_kick": "taker",
     "goal_kick": "taker",
     "penalty": "taker",
+    "throw_in": "taker",
+    "missed_shot": "player",
+    "offside": "player",
 }
 
 

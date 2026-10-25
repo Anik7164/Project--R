@@ -105,7 +105,7 @@ def test_load_soccernet_spotting(tmp_path):
     path = tmp_path / "results_spotting.json"
     path.write_text(json.dumps({"predictions": [
         {"gameTime": "1 - 00:02", "label": "Goal", "position": "2000", "half": "1", "confidence": "0.9"},
-        {"gameTime": "1 - 00:04", "label": "Throw-in", "position": "4000", "half": "1", "confidence": "0.9"},
+        {"gameTime": "1 - 00:04", "label": "Kick-off", "position": "4000", "half": "1", "confidence": "0.9"},
         {"gameTime": "2 - 00:01", "label": "Corner", "position": "1000", "half": "2", "confidence": "0.9"},
     ]}))
     assert load_spotting(path, FPS) == [(50, "goal", 0.9)]
@@ -163,3 +163,23 @@ def test_card_held_up_in_close_up_is_found():
 def test_red_patch_inside_an_advert_is_not_a_card():
     from card_detection import card_candidates
     assert card_candidates(_closeup_with_card(advert=True)) == []
+
+
+def test_spotted_cards_take_colour_and_time_from_the_picture():
+    from match_events import merge_cards
+    spotted = [(2200, "foul", 0.38), (2225, "yellow_card", 0.47),
+               (2375, "yellow_card", 0.65)]
+    seen = [(2378, "red_card")]
+    merged = merge_cards(spotted, seen, FPS)
+    assert merged == [(2200, "foul", 0.38), (2378, "red_card", 0.65)]
+
+
+def test_spotting_threshold_drops_weak_predictions(tmp_path):
+    path = tmp_path / "spot.json"
+    path.write_text(json.dumps({"predictions": [
+        {"label": "Foul", "position": "88000", "half": "1", "confidence": "0.38"},
+        {"label": "Corner", "position": "53500", "half": "1", "confidence": "0.2"},
+        {"label": "Shots off target", "position": "30000", "half": "1",
+         "confidence": "0.40"},
+    ]}))
+    assert load_spotting(path, FPS, threshold=0.35) == [(2200, "foul", 0.38)]
