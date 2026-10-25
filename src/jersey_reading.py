@@ -51,6 +51,8 @@ MIN_SHARE = 0.5
 # Upscale small crops so OCR has enough pixels to work with.
 MIN_OCR_HEIGHT = 160
 ROSTER_NAME_MATCH = 0.7
+# Words on shirts and boards that are not player names.
+NOT_NAMES = {"NONE", "UNITED", "CITY", "FC", "AFC", "CLUB", "THE"}
 
 
 def prepare(crop):
@@ -86,7 +88,7 @@ def parse_name(results):
     best = None
     for _, text, confidence in results:
         name = re.sub(r"[^A-Z.\-' ]", "", text.upper()).strip(" .-'")
-        if len(name.replace(" ", "")) < MIN_NAME_LENGTH:
+        if len(name.replace(" ", "")) < MIN_NAME_LENGTH or name in NOT_NAMES:
             continue
         if confidence < MIN_OCR_CONFIDENCE:
             continue
