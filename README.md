@@ -99,6 +99,10 @@ On test1.mp4 the model finds the corner after the 0:54 save, the foul at 1:28 an
 * With `--spotting` the event types and times come from a SoccerNet action-spotting model's `results_spotting.json` (goal, foul, yellow/red card, corner, free kick, goal kick, penalty).
 * Without it, simple rules are used: a yellow/red rectangle above the referee's head is a card, a ball that stood still and is then played is a set piece (a goal kick when the goalkeeper takes it), and a free kick implies a foul by the opponent nearest the fouled player. These rules are unreliable on highlight reels, which cut away before set pieces are taken: on test1.mp4 none of the fouls/free kicks they found were real.
 
+### Research benchmarks
+
+`benchmarks/` compares the pipeline with published models on SoccerNet, using the official evaluation code. Event spotting compares MaxPool, NetVLAD, CALF and NetVLAD++ on the 100 test matches. Tracking compares 8 trackers and 9 detectors, each with and without our ID layer, scored with HOTA, IDF1 and MOTA. Setup, downloads (all inside the project folder) and run order are in [benchmarks/README.md](benchmarks/README.md).
+
 ### Who is who: name → number → colour
 
 ```bash

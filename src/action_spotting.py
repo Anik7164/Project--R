@@ -164,24 +164,28 @@ def load_model(path=MODEL_PATH):
     return model.eval()
 
 
-def clips(features, window):
-    """One window of `window` feature frames centred on every frame
-    (edges repeat the first/last frame)."""
+def clips(features, window, start=0, stop=None):
+    """One window of `window` feature frames centred on each frame from
+    start to stop (edges repeat the first/last frame)."""
+    stop = len(features) if stop is None else min(stop, len(features))
     offsets = np.arange(-(window // 2), window - window // 2)
-    index = np.clip(np.arange(len(features))[:, None] + offsets, 0,
+    index = np.clip(np.arange(start, stop)[:, None] + offsets, 0,
                     len(features) - 1)
     return features[index]
 
 
-def score_frames(model, features, batch_size=256):
-    """(N, 17) event scores, one row per half second."""
-    windows = clips(np.asarray(features, dtype=np.float32),
-                    int(WINDOW_SECONDS * FEATURE_FPS))
+def score_frames(model, features, batch_size=256, device="cpu"):
+    """(N, 17) event scores, one row per half second. Windows are built
+    one batch at a time, so a full match half fits in memory."""
+    features = np.asarray(features, dtype=np.float32)
+    window = int(WINDOW_SECONDS * FEATURE_FPS)
+    model.to(device)
     scores = []
     with torch.no_grad():
-        for start in range(0, len(windows), batch_size):
-            batch = torch.from_numpy(windows[start:start + batch_size])
-            scores.append(model(batch).numpy()[:, 1:])  # column 0: background
+        for start in range(0, len(features), batch_size):
+            batch = clips(features, window, start, start + batch_size)
+            output = model(torch.from_numpy(batch).to(device))
+            scores.append(output.cpu().numpy()[:, 1:])  # column 0: background
     return np.concatenate(scores) if scores else np.zeros((0, len(LABELS)))
 
 
@@ -196,7 +200,7 @@ def peaks(scores, window, threshold):
     return found
 
 
-def spot(scores, threshold=0.0, nms_seconds=NMS_SECONDS):
+def spot(scores, threshold=0.0, nms_seconds=NMS_SECONDS, half=1):
     """SoccerNet results_spotting predictions from frame scores."""
     window = int(nms_seconds * FEATURE_FPS)
     predictions = []
@@ -204,10 +208,10 @@ def spot(scores, threshold=0.0, nms_seconds=NMS_SECONDS):
         for index, confidence in peaks(scores[:, label_index], window, threshold):
             seconds = index / FEATURE_FPS
             predictions.append({
-                "gameTime": f"1 - {int(seconds // 60)}:{int(seconds % 60):02d}",
+                "gameTime": f"{half} - {int(seconds // 60)}:{int(seconds % 60):02d}",
                 "label": label,
                 "position": str(int(seconds * 1000)),
-                "half": "1",
+                "half": str(half),
                 "confidence": str(round(confidence, 4)),
             })
     predictions.sort(key=lambda p: int(p["position"]))

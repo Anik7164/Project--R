@@ -46,3 +46,6 @@ wandb/
 *.sqlite3
 *.log
 *.tmp
+
+# Benchmark datasets (downloaded by benchmarks/download_data.py)
+data/SoccerNet/
