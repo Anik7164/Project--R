@@ -29,13 +29,13 @@ import torch
 from ultralytics import YOLO
 
 from camera_motion import CameraMotionEstimator, warp_points
+from detector_classes import ball_class, default_model
 
 ROOT = Path(__file__).resolve().parent.parent
 DEFAULT_VIDEO = ROOT / "data" / "videos" / "test1.mp4"
-DEFAULT_MODEL = ROOT / "yolo26n.pt"
+DEFAULT_MODEL = default_model()
 OUTPUT_DIR = ROOT / "outputs" / "tracking"
 
-BALL_CLASS = 32
 CONFIDENCE = 0.15
 # The ball is tiny; a larger input size finds it far more often.
 IMAGE_SIZE = 1280
@@ -147,6 +147,7 @@ def main():
 
     device = 0 if torch.cuda.is_available() else "cpu"
     model = YOLO(str(args.model))
+    ball_id = ball_class(model)
     cap = cv2.VideoCapture(str(args.video))
     if not cap.isOpened():
         raise RuntimeError(f"Cannot open video: {args.video}")
@@ -167,7 +168,7 @@ def main():
             if not success:
                 break
             result = model.predict(
-                frame, classes=[BALL_CLASS], conf=CONFIDENCE,
+                frame, classes=[ball_id], conf=CONFIDENCE,
                 imgsz=IMAGE_SIZE, device=device, verbose=False,
             )[0]
             candidates = [

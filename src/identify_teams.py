@@ -19,7 +19,7 @@ Usage:
 import project_cache  # noqa: F401  keeps downloads/caches in <project>/.cache
 import argparse
 import csv
-from collections import defaultdict
+from collections import Counter, defaultdict
 from pathlib import Path
 
 import cv2
@@ -34,6 +34,10 @@ TRACKING_DIR = ROOT / "outputs" / "tracking"
 
 # Look at every Nth frame; kit colours do not change quickly.
 FRAME_STEP = 5
+# With a football detector (train_detector.py) the detected class decides
+# a player's role when this share of their boxes agree.
+ROLE_SHARE = 0.6
+DETECTOR_ROLES = {"player", "goalkeeper", "referee"}
 # Descriptors kept per player, so memory stays bounded on full matches.
 MAX_SAMPLES_PER_PLAYER = 40
 OVERLAP_LIMIT = 0.15
@@ -55,6 +59,22 @@ def read_track_rows(tracks_csv):
             ))
     if rows:
         yield current, rows
+
+
+def detector_roles(tracks_csv):
+    """{track_id: role} from the class_name column, when the tracks come
+    from a football detector; {} for a COCO "person" detector."""
+    counts = defaultdict(Counter)
+    with tracks_csv.open(newline="", encoding="utf-8") as file:
+        for row in csv.DictReader(file):
+            if row.get("class_name") in DETECTOR_ROLES:
+                counts[int(row["track_id"])][row["class_name"]] += 1
+    roles = {}
+    for track_id, votes in counts.items():
+        role, count = votes.most_common(1)[0]
+        if count >= ROLE_SHARE * sum(votes.values()):
+            roles[track_id] = role
+    return roles
 
 
 def collect_samples(video_path, tracks_csv):
@@ -97,11 +117,17 @@ def collect_samples(video_path, tracks_csv):
     return samples
 
 
-def identify_teams(samples):
-    """Fit team colours and decide each player's team and role."""
-    classifier = TeamClassifier().fit(
-        [d for _, _, descriptors in samples for d in descriptors]
-    )
+def identify_teams(samples, roles=None):
+    """Fit team colours and decide each player's team and role (roles:
+    detector_roles(), optional)."""
+    roles = roles or {}
+    # Goalkeepers and referees the detector found are left out of the
+    # team colours.
+    classifier = TeamClassifier().fit([
+        d for player_ids, _, descriptors in samples
+        for player_id, d in zip(player_ids, descriptors)
+        if roles.get(player_id, "player") == "player"
+    ])
     votes = TeamVotes()
     player_descriptors = defaultdict(list)
 
@@ -112,7 +138,7 @@ def identify_teams(samples):
             if descriptor is not None:
                 player_descriptors[player_id].append(descriptor)
 
-    decisions = votes.decide()
+    decisions = votes.decide(roles)
     for player_id, decision in decisions.items():
         own = player_descriptors[player_id]
         colour = shirt_colour_name(sum(own) / len(own)) if own else None
@@ -143,7 +169,10 @@ def main():
             raise FileNotFoundError(f"Required file not found: {path}")
 
     samples = collect_samples(args.video, tracks_csv)
-    classifier, decisions = identify_teams(samples)
+    roles = detector_roles(tracks_csv)
+    if roles:
+        print(f"Roles from the football detector for {len(roles)} IDs")
+    classifier, decisions = identify_teams(samples, roles)
 
     with output_csv.open("w", newline="", encoding="utf-8") as file:
         writer = csv.writer(file)

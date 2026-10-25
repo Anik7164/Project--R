@@ -41,7 +41,6 @@ Usage:
 import project_cache  # noqa: F401  keeps downloads/caches in <project>/.cache
 import argparse
 import csv
-import os
 import json
 from collections import defaultdict
 from dataclasses import dataclass
@@ -51,6 +50,7 @@ import cv2
 import numpy as np
 
 from card_detection import detect_card, find_shown_cards, yolo_people
+from detector_classes import default_model
 from scoreboard import find_score_changes, parse_score
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -83,7 +83,7 @@ CARD_GAP = 1.0
 # Cards found both ways within this many seconds are one card.
 CARD_SAME_SECONDS = 5.0
 # Person detector for cards shown in close-ups.
-DEFAULT_MODEL = Path(os.environ.get("YOLO_MODEL", ROOT / "yolo26n.pt"))
+DEFAULT_MODEL = default_model()
 
 # SoccerNet-v2 action-spotting labels -> dataset.json event types.
 SOCCERNET_LABELS = {

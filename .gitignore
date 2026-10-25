@@ -49,3 +49,7 @@ wandb/
 
 # Benchmark datasets (downloaded by benchmarks/download_data.py)
 data/SoccerNet/
+
+# Trained models (src/train_detector.py)
+models/
+data/football_det/

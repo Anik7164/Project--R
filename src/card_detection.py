@@ -240,10 +240,13 @@ def yolo_people(model_path):
     """A detect_people function using an Ultralytics YOLO model."""
     from ultralytics import YOLO
 
+    from detector_classes import people_classes
+
     model = YOLO(str(model_path))
+    people = people_classes(model)
 
     def detect(frame):
-        result = model.predict(frame, classes=[0], conf=0.25, verbose=False)[0]
+        result = model.predict(frame, classes=people, conf=0.25, verbose=False)[0]
         return [tuple(map(float, b)) for b in result.boxes.xyxy.cpu().numpy()]
 
     return detect

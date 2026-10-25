@@ -159,17 +159,42 @@ class TeamVotes:
                 )
                 self.nearer_team[player_id][nearer] += 1
 
-    def decide(self):
+    def decide(self, detector_roles=None):
         """Return {player_id: {"team", "role", "confidence"}}.
 
         team is "team_a", "team_b" or None (referee / unknown); role is
         "player", "goalkeeper" or "referee".
+
+        detector_roles: {player_id: role} from a football detector that
+        tells players, goalkeepers and referees apart; where given it
+        decides the role, and colour and position only decide the team.
         """
+        detector_roles = detector_roles or {}
         decisions = {}
         for player_id, votes in self.votes.items():
             total = sum(votes.values())
             other_share = votes["other"] / total
             team_votes = {t: votes[t] for t in TEAM_LABELS}
+            role = detector_roles.get(player_id)
+
+            if role == "referee":
+                decisions[player_id] = {"team": None, "role": "referee",
+                                        "confidence": 1.0}
+                continue
+            if role == "goalkeeper":
+                nearer = self.nearer_team[player_id]
+                decisions[player_id] = {
+                    "team": nearer.most_common(1)[0][0] if nearer else None,
+                    "role": "goalkeeper", "confidence": 1.0,
+                }
+                continue
+            if role == "player" and sum(team_votes.values()):
+                team = max(team_votes, key=team_votes.get)
+                decisions[player_id] = {
+                    "team": team, "role": "player",
+                    "confidence": round(team_votes[team] / sum(team_votes.values()), 3),
+                }
+                continue
 
             if other_share < OTHER_VOTE_SHARE:
                 team = max(team_votes, key=team_votes.get)

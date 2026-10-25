@@ -23,7 +23,6 @@ Usage:
 import project_cache  # noqa: F401  keeps downloads/caches in <project>/.cache
 import argparse
 import csv
-import os
 from collections import defaultdict, deque
 from pathlib import Path
 
@@ -32,13 +31,15 @@ import numpy as np
 import torch
 from ultralytics import YOLO
 
+from detector_classes import default_model, people_classes
 from identity import StablePlayerTracker
 
 ROOT = Path(__file__).resolve().parent.parent
 
 DEFAULT_VIDEO = ROOT / "data" / "videos" / "test1.mp4"
-# Override with --model or the YOLO_MODEL environment variable.
-DEFAULT_MODEL = Path(os.environ.get("YOLO_MODEL", ROOT / "yolo26n.pt"))
+# Override with --model or the YOLO_MODEL environment variable; a trained
+# football model in models/ (train_detector.py) is used when there is one.
+DEFAULT_MODEL = default_model()
 DEFAULT_TRACKER = ROOT / "botsort_custom.yaml"
 OUTPUT_DIR = ROOT / "outputs" / "tracking"
 
@@ -208,6 +209,9 @@ def main():
     print("Tracker:", args.tracker)
 
     model = YOLO(str(args.model))
+    person_classes = people_classes(model)
+    print("Detector:", args.model, "| people classes:",
+          [model.names[c] for c in person_classes])
 
     cap = cv2.VideoCapture(str(args.video))
     if not cap.isOpened():
@@ -259,7 +263,7 @@ def main():
                     source=frame,
                     tracker=str(args.tracker),
                     persist=True,
-                    classes=[0],
+                    classes=person_classes,
                     conf=CONFIDENCE,
                     iou=NMS_IOU,
                     imgsz=IMAGE_SIZE,
