@@ -123,7 +123,16 @@ def commentary(events, identities, teams, templates_by_type, rng=random):
             event["players"][0] if event["players"] else None,
         )
         track_id = main["track_id"] if main else None
-        who = describe(identities.get(track_id), teams.get(track_id))
+        team_info = teams.get(track_id)
+        if team_info is None and event.get("team"):
+            # Nobody identified, but the team is known (e.g. from the
+            # scoreboard): "a player in red".
+            team_info = next(
+                (t for t in teams.values() if t.get("team") == event["team"]
+                 and t.get("role", "player") == "player"),
+                None,
+            )
+        who = describe(identities.get(track_id), team_info)
         lines.append((event, fill_template(templates, event["minute"], who, rng)))
     return lines
 

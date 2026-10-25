@@ -94,3 +94,10 @@ def test_team_colour_wins_over_own_crop_colour():
 def test_video_time_format():
     assert video_time(82.24) == "1:22.2"
     assert video_time(5) == "0:05.0"
+
+
+def test_goal_without_scorer_uses_team_colour():
+    event = {"type": "goal", "minute": 2, "players": [], "team": "team_b"}
+    teams = {9: {"team": "team_b", "role": "player", "team_colour": "blue"}}
+    [(_, line)] = commentary([event], {}, teams, TEMPLATES, random.Random(0))
+    assert "নীল জার্সির খেলোয়াড়" in line

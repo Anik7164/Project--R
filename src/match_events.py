@@ -10,6 +10,9 @@ What happened is decided in one of two ways:
   * from an action-spotting model's output (SoccerNet "results_spotting"
     JSON, --spotting): goals, fouls, cards, corners, free kicks and goal
     kicks with timestamps; this module then works out who was involved;
+  * goals always come from the broadcast scoreboard (scoreboard.py) when
+    one is found: the score graphic changing is far more reliable than
+    anything seen on the pitch;
   * from rules on the tracks alone: a card is a yellow or red rectangle
     held up above the referee's head (card_detection.py); a set piece is a ball that stood still
     and is then played; the player who plays it is the taker; a set piece
@@ -46,6 +49,7 @@ import cv2
 import numpy as np
 
 from card_detection import detect_card
+from scoreboard import find_score_changes, parse_score
 
 ROOT = Path(__file__).resolve().parent.parent
 TRACKING_DIR = ROOT / "outputs" / "tracking"
@@ -104,6 +108,7 @@ class MatchData:
     tracks: dict      # frame -> [(track_id, (x1, y1, x2, y2))]
     teams: dict       # track_id -> {"team", "role"}
     ball: dict        # frame -> (x, y, sx, sy, scene)
+    team_colours: dict = None  # team -> shirt colour name
 
     def team(self, track_id):
         return self.teams.get(track_id, {}).get("team")
@@ -139,6 +144,7 @@ def load_match(tracks_csv, teams_csv, ball_csv, fps):
             ))
 
     teams = {}
+    team_colours = {}
     if teams_csv and Path(teams_csv).exists():
         with Path(teams_csv).open(newline="", encoding="utf-8") as file:
             for row in csv.DictReader(file):
@@ -146,6 +152,10 @@ def load_match(tracks_csv, teams_csv, ball_csv, fps):
                     "team": row["team"] or None,
                     "role": row["role"],
                 }
+                if row["team"] and row["role"] == "player" and row.get(
+                    "team_colour"
+                ):
+                    team_colours[row["team"]] = row["team_colour"]
 
     ball = {}
     with Path(ball_csv).open(newline="", encoding="utf-8") as file:
@@ -154,7 +164,8 @@ def load_match(tracks_csv, teams_csv, ball_csv, fps):
                 float(row["x"]), float(row["y"]),
                 float(row["sx"]), float(row["sy"]), int(row["scene"]),
             )
-    return MatchData(fps=fps, tracks=dict(tracks), teams=teams, ball=ball)
+    return MatchData(fps=fps, tracks=dict(tracks), teams=teams, ball=ball,
+                     team_colours=team_colours)
 
 
 def load_spotting(path, fps, half=1):
@@ -470,6 +481,74 @@ def events_from_rules(match, start_minute=0, video_path=None):
     return sorted(events, key=lambda e: e["frame"])
 
 
+def nearest_to_ball(match, frame, team):
+    """Player of `team` nearest the ball at its last sighting within
+    GOAL_LOOKBACK before `frame`, however far away."""
+    first = frame - int(GOAL_LOOKBACK * match.fps)
+    for f in range(frame, first, -1):
+        if f not in match.ball:
+            continue
+        ball = np.array(match.ball[f][:2])
+        mates = [(tid, box) for tid, box in match.players(f)
+                 if match.team(tid) == team]
+        if mates:
+            return min(
+                mates,
+                key=lambda m: np.linalg.norm(_feet(m[1]) - ball) / _height(m[1]),
+            )[0]
+    return None
+
+
+def scoring_teams(match, changes):
+    """{"home"/"away": team} from the colours of the board's two halves
+    and the teams' shirt colours; one match is enough for both."""
+    colours = match.team_colours or {}
+    side_colour = {c["side"]: c.get("side_colour") for c in changes}
+    mapping = {}
+    for side, colour in side_colour.items():
+        found = [t for t, c in colours.items() if colour and c == colour]
+        if len(found) == 1:
+            mapping[side] = found[0]
+    teams = sorted(colours)
+    if len(mapping) == 1 and len(teams) == 2:
+        side, team = next(iter(mapping.items()))
+        other_side = "away" if side == "home" else "home"
+        mapping[other_side] = teams[1] if team == teams[0] else teams[0]
+    if len(set(mapping.values())) < len(mapping):
+        return {}
+    return mapping
+
+
+def goals_from_scoreboard(match, video_path, start_score=(0, 0),
+                          start_minute=0):
+    """One goal event per change of the score graphic.
+
+    The scorer is the last player on the ball before it (see attribute),
+    from the scoring team when the board's colours tell which team that
+    is.
+    """
+    touches = find_touches(match)
+    changes = find_score_changes(video_path, start_score)
+    side_team = scoring_teams(match, changes)
+    events = []
+    for change in changes:
+        frame = change["frame"]
+        team = side_team.get(change["side"])
+        own = [t for t in touches if t.team == team] if team else touches
+        players = attribute(match, own, "goal", frame)
+        if not players and team:
+            nearest = nearest_to_ball(match, frame, team)
+            if nearest is not None:
+                players = [_player(match, "scorer", nearest)]
+        event = _event(match, frame, "goal", players, 0.9, "scoreboard",
+                       start_minute)
+        event["team"] = team
+        event["side"] = change["side"]
+        event["score"] = change["score"]
+        events.append(event)
+    return events
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
     parser.add_argument("--video", type=Path, required=True,
@@ -480,6 +559,10 @@ def main():
     parser.add_argument("--fps", type=float, default=25.0)
     parser.add_argument("--start-minute", type=int, default=0,
                         help="match minute at the start of the video")
+    parser.add_argument("--start-score", default="0-0",
+                        help="score shown at the start of the video")
+    parser.add_argument("--no-scoreboard", action="store_true",
+                        help="do not read goals from the score graphic")
     args = parser.parse_args()
 
     name = args.video.stem
@@ -494,13 +577,22 @@ def main():
         events = events_from_spotting(match, spotted, args.start_minute)
     else:
         events = events_from_rules(match, args.start_minute, args.video)
+    if not args.no_scoreboard:
+        goals = goals_from_scoreboard(
+            match, args.video, parse_score(args.start_score),
+            args.start_minute,
+        )
+        if goals:
+            events = [e for e in events if e["type"] != "goal"] + goals
+            events.sort(key=lambda e: e["frame"])
 
     output = TRACKING_DIR / f"{name}_events.json"
     output.write_text(json.dumps(events, indent=2, ensure_ascii=False),
                       encoding="utf-8")
     for event in events:
         who = ", ".join(f"{p['role']} P{p['track_id']}" for p in event["players"])
-        print(f"{event['minute']:>3}'  {event['type']:<12} {who}")
+        score = f" ({event['score']})" if "score" in event else ""
+        print(f"{event['minute']:>3}'  {event['type']:<12} {who}{score}")
     print("Events:", output)
 
 

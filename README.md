@@ -74,13 +74,15 @@ Writes `outputs/tracking/test1_teams.csv`: for every stable player ID its `team`
 
 ```bash
 python src/ball_tracking.py --video data/videos/test1.mp4
-python src/match_events.py  --video data/videos/test1.mp4 [--spotting results_spotting.json] [--start-minute 0]
+python src/match_events.py  --video data/videos/test1.mp4 [--spotting results_spotting.json] [--start-minute 0] [--start-score 0-0]
+python src/scoreboard.py    --video data/videos/test1.mp4   # optional: just list the goals
 ```
 
 `ball_tracking.py` keeps the YOLO "sports ball" detection that continues the ball's path (camera motion removed) and fills short gaps. `match_events.py` writes `outputs/tracking/test1_events.json` with each event's minute, type (names from `dataset.json`) and the players involved (scorer/assist, fouler/fouled, booked player, set-piece taker), using ball possession from the tracks:
 
+* **Goals** come from the broadcast score graphic (`src/scoreboard.py`): it finds the part of the top of the frame that stays the same, the two score digits in it, and reports a goal whenever one digit changes and stays changed for 2 seconds. On test1.mp4 it finds both goals (1:02.8 United 1-0, 1:49.6 Tottenham 1-1). The colours of the board's two halves are matched to the team colours to know which team scored; the scorer is the last player of that team on the ball, which is only as good as the ball tracking (weak on highlights). Use `--no-scoreboard` to turn it off.
 * With `--spotting` the event types and times come from a SoccerNet action-spotting model's `results_spotting.json` (goal, foul, yellow/red card, corner, free kick, goal kick, penalty).
-* Without it, simple rules are used: a yellow/red rectangle above the referee's head is a card, a ball that stood still and is then played is a set piece (a goal kick when the goalkeeper takes it), and a free kick implies a foul by the opponent nearest the fouled player. Goals need the spotting model.
+* Without it, simple rules are used: a yellow/red rectangle above the referee's head is a card, a ball that stood still and is then played is a set piece (a goal kick when the goalkeeper takes it), and a free kick implies a foul by the opponent nearest the fouled player. These rules are unreliable on highlight reels, which cut away before set pieces are taken: on test1.mp4 none of the fouls/free kicks they found were real.
 
 ### Who is who: name → number → colour
 
