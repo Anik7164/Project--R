@@ -33,6 +33,7 @@ from ultralytics import YOLO
 
 from detector_classes import default_model, people_classes
 from identity import StablePlayerTracker
+from reid import load_default as load_reid
 
 ROOT = Path(__file__).resolve().parent.parent
 
@@ -185,6 +186,10 @@ def parse_args():
         "--no-video", action="store_true",
         help="skip writing the annotated video (faster)",
     )
+    parser.add_argument(
+        "--no-reid", action="store_true",
+        help="match players on colour only (no deep appearance model)",
+    )
     return parser.parse_args()
 
 
@@ -237,7 +242,9 @@ def main():
             cap.release()
             raise RuntimeError(f"Cannot create output video: {output_video}")
 
-    stable = StablePlayerTracker()
+    reid = None if args.no_reid else load_reid("cuda:0" if device == 0 else "cpu")
+    print("ReID:", "on" if reid else "off")
+    stable = StablePlayerTracker(reid=reid)
     delay = stable.identity.config.pending_timeout + 2
 
     frame_number = 0

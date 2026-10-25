@@ -141,6 +141,18 @@ class IdentityConfig:
 
     feature_momentum: float = 0.9
 
+    # Deep appearance (ReID) embeddings, when a ReID model is given to
+    # StablePlayerTracker. Re-linking then compares
+    #   (1 - reid_weight) * colour distance + reid_weight * reid_scale * ReID distance
+    # instead of colour alone. On test1.mp4 (LMBN, Market-1501) the ReID
+    # cosine distance separates teammates better than colour (AUC 0.85 vs
+    # 0.79); the same player's views are within 0.39 in 90% of cases,
+    # hence reid_scale ~ 0.57 / 0.39 to put it on the colour scale.
+    reid_weight: float = 0.5
+    reid_scale: float = 1.5
+    # Beyond this ReID distance two views are never the same player.
+    reid_gate: float = 0.6
+
 
 @dataclass
 class Player:
@@ -157,6 +169,7 @@ class Player:
     swap_votes: dict = field(default_factory=dict)
     team_votes: Counter = field(default_factory=Counter)
     wrong_team: int = 0
+    embedding: np.ndarray | None = None
 
     def team(self, min_votes, min_share):
         total = sum(self.team_votes.values())
@@ -175,7 +188,11 @@ class Pending:
     scene: int
     features: list = field(default_factory=list)
     teams: list = field(default_factory=list)
+    embeddings: list = field(default_factory=list)
     hits: int = 0
+
+    def mean_embedding(self):
+        return _blend_embedding(None, [e for e in self.embeddings if e is not None])
 
     def team(self):
         votes = Counter(t for t in self.teams if t in TEAM_LABELS)
@@ -190,6 +207,18 @@ class Pending:
             return None
         mean = np.mean(feats, axis=0)
         return mean / mean.sum()
+
+
+def _blend_embedding(old, new, momentum=0.9):
+    """Moving average of L2-normalised embeddings. new: one embedding,
+    a list of them (averaged) or None."""
+    if isinstance(new, list):
+        new = np.mean(new, axis=0) if new else None
+    if new is None:
+        return old
+    mixed = new if old is None else momentum * old + (1.0 - momentum) * new
+    norm = np.linalg.norm(mixed)
+    return mixed / norm if norm > 0 else old
 
 
 def _center(box):
@@ -278,7 +307,8 @@ class IdentityManager:
     # ------------------------------------------------------------------
 
     def update(self, frame_index, tracker_ids, boxes, features,
-               warp=None, scene_cut=False, frame_size=None, others=()):
+               warp=None, scene_cut=False, frame_size=None, others=(),
+               embeddings=None):
         """Process one frame.
 
         Args:
@@ -293,6 +323,8 @@ class IdentityManager:
             others: boxes of other people in the frame that are not
                 tracked (dropped duplicates, spectators); a player touching
                 one is not a clean view.
+            embeddings: matching L2-normalised ReID embeddings (or None),
+                optional.
 
         Returns:
             (assignments, resolved)
@@ -313,14 +345,16 @@ class IdentityManager:
         elif warp is not None:
             self._apply_camera_motion(warp)
 
+        if embeddings is None:
+            embeddings = [None] * len(boxes)
         assignments = [None] * len(boxes)
         seen_tracker_ids = set()
         teams = self._predict_teams(features)
         self._record_contacts(tracker_ids, boxes, others)
         self._fix_swaps(tracker_ids, features)
 
-        for index, (tid, box, feat, team) in enumerate(
-            zip(tracker_ids, boxes, features, teams)
+        for index, (tid, box, feat, team, emb) in enumerate(
+            zip(tracker_ids, boxes, features, teams, embeddings)
         ):
             tid = int(tid)
             seen_tracker_ids.add(tid)
@@ -334,7 +368,7 @@ class IdentityManager:
                 player_id = None
 
             if player_id is not None:
-                self._update_player(self.players[player_id], box, feat)
+                self._update_player(self.players[player_id], box, feat, emb)
                 if team is not None:
                     self.players[player_id].team_votes[team] += 1
                 assignments[index] = player_id
@@ -351,6 +385,7 @@ class IdentityManager:
             pending.last_frame = frame_index
             pending.features.append(feat)
             pending.teams.append(team)
+            pending.embeddings.append(emb)
             pending.hits += 1
 
         resolved = self._resolve_pending(seen_tracker_ids)
@@ -560,7 +595,7 @@ class IdentityManager:
             return True
         return False
 
-    def _update_player(self, player, box, feature):
+    def _update_player(self, player, box, feature, embedding=None):
         gap = self.frame - player.last_frame
         if player.scene == self.scene and 0 < gap <= 5:
             step = (_center(box) - _center(player.box)) / gap
@@ -574,6 +609,8 @@ class IdentityManager:
             player.feature = blend(
                 player.feature, feature, self.config.feature_momentum
             )
+            player.embedding = _blend_embedding(
+                player.embedding, embedding, self.config.feature_momentum)
         player.last_frame = self.frame
         player.scene = self.scene
         player.hits += 1
@@ -587,6 +624,7 @@ class IdentityManager:
             scene=self.scene,
             hits=pending.hits,
             team_votes=Counter(t for t in pending.teams if t),
+            embedding=pending.mean_embedding(),
         )
         self.players[player.player_id] = player
         self.next_player_id += 1
@@ -648,6 +686,9 @@ class IdentityManager:
                 player.velocity = np.zeros(2)
                 player.hits += pending.hits
                 player.team_votes.update(t for t in pending.teams if t)
+                player.embedding = _blend_embedding(
+                    player.embedding, pending.mean_embedding(),
+                    cfg.feature_momentum)
             self.bindings[tid] = player.player_id
             resolved[tid] = player.player_id
 
@@ -667,6 +708,7 @@ class IdentityManager:
         for i, tid in enumerate(pending_ids):
             pending = self.pending[tid]
             feature = pending.mean_feature()
+            embedding = pending.mean_embedding()
             team = pending.team()
             for j, player in enumerate(candidates):
                 # Seen together in one frame means two different people.
@@ -678,6 +720,18 @@ class IdentityManager:
                 gap = pending.first_frame - player.last_frame
                 gaps[i, j] = gap
                 app = descriptor_distance(feature, player.feature)
+                if embedding is not None and player.embedding is not None:
+                    reid = 1.0 - float(embedding @ player.embedding)
+                    if reid > cfg.reid_gate:
+                        continue
+                    if feature is None or player.feature is None:
+                        app = cfg.reid_scale * reid
+                    else:
+                        app = ((1 - cfg.reid_weight) * app
+                               + cfg.reid_weight * cfg.reid_scale * reid)
+                    feature_known = True
+                else:
+                    feature_known = feature is not None and player.feature is not None
                 appearance[i, j] = app
 
                 # Positions are only comparable inside one shot and for a
@@ -688,7 +742,7 @@ class IdentityManager:
                         cost[i, j] = app / cfg.appearance_gate_after_cut
                     continue
 
-                unknown = feature is None or player.feature is None
+                unknown = not feature_known
                 if unknown:
                     # No clean view yet (overlapping players): decide on
                     # motion alone, with a neutral appearance score.
@@ -769,9 +823,13 @@ class StablePlayerTracker:
     """Per-frame glue: duplicate removal, camera motion, appearance and
     identity, for the detections BoT-SORT returns on one frame."""
 
-    def __init__(self, config=None):
+    def __init__(self, config=None, reid=None):
+        """reid: optional callable (frame, boxes) -> L2-normalised
+        embeddings, e.g. reid.ReidEmbedder."""
         self.identity = IdentityManager(config)
         self.camera = CameraMotionEstimator()
+        self.reid = reid
+        self.reid_every = 5
         self.last_cut = False
 
     def process(self, frame_index, frame, tracker_ids, boxes, confidences):
@@ -805,6 +863,16 @@ class StablePlayerTracker:
             for i in keep
         ]
         kept = set(keep)
+        embeddings = None
+        if self.reid is not None:
+            # Only clean views, as for the colour descriptors. Players
+            # already bound to an ID only refresh their embedding every
+            # reid_every frames; new (pending) IDs get one every frame.
+            refresh = frame_index % self.reid_every == 0
+            clean = [i for i, f in zip(keep, features) if f is not None
+                     and (refresh or int(tracker_ids[i]) not in self.identity.bindings)]
+            by_index = dict(zip(clean, self.reid(frame, [boxes[i] for i in clean])))
+            embeddings = [by_index.get(i) for i in keep]
 
         assignments, resolved = self.identity.update(
             frame_index,
@@ -815,6 +883,7 @@ class StablePlayerTracker:
             scene_cut=cut,
             frame_size=(frame.shape[1], frame.shape[0]),
             others=[boxes[i] for i in range(len(boxes)) if i not in kept],
+            embeddings=embeddings,
         )
         return keep, assignments, resolved
 
