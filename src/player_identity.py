@@ -15,6 +15,8 @@ used and {player} becomes "7 নম্বর জার্সির খেলো�
 
 Usage (after match_events.py and jersey_reading.py):
     python src/player_identity.py --video data/videos/test1.mp4
+Writes outputs/tracking/<name>_commentary.json (video time, event, line),
+which speak_commentary.py turns into speech.
 """
 
 import project_cache  # noqa: F401  keeps downloads/caches in <project>/.cache
@@ -212,8 +214,12 @@ def main():
     }
 
     rng = random.Random(args.seed)
+    lines = []
     print("video time  match min  event        player  commentary")
     for event, line in commentary(events, identities, teams, templates, rng):
+        if line:
+            lines.append({"time": event["time"], "minute": event["minute"],
+                          "type": event["type"], "text": line})
         role = MAIN_ROLE.get(event["type"])
         main = next(
             (p for p in event["players"] if p["role"] == role), None
@@ -223,6 +229,10 @@ def main():
             f"{video_time(event['time']):>10}  {event['minute']:>8}'  "
             f"{event['type']:<12} {player:<7} {line or '-'}"
         )
+    output = TRACKING_DIR / f"{name}_commentary.json"
+    output.write_text(json.dumps(lines, ensure_ascii=False, indent=2),
+                      encoding="utf-8")
+    print("Commentary:", output)
 
 
 if __name__ == "__main__":

@@ -50,6 +50,26 @@ Every script imports `src/project_cache.py` first, which points the PyTorch, Ult
 $env:PIP_CACHE_DIR = "$PWD\.cache\pip"; $env:TEMP = "$PWD\.cache\tmp"; $env:TMP = $env:TEMP
 ```
 
+## 📦 Models
+
+```powershell
+python src/setup_models.py --install    # extra packages + every model, all inside the project folder
+```
+
+This installs `requirements-models.txt` (EasyOCR and BoxMOT without their dependencies, so they cannot replace the project's OpenCV 5) and downloads YOLO26, PARSeq, the EasyOCR text detector, LMBN ReID, ResNet-152, NetVLAD++ and the Bengali MMS-TTS voice into `.cache/`.
+
+### Football detector (train once, on your GPU)
+
+The COCO model only knows "person" and "sports ball": it cannot tell a referee from a player, and it often misses the small ball. `src/train_detector.py` trains YOLO26 on SoccerNet-Tracking, where every player, goalkeeper, referee and the ball is boxed in every frame of 57 broadcast clips:
+
+```powershell
+python src/train_detector.py download     # ~12 GB into data/SoccerNet
+python src/train_detector.py prepare      # YOLO dataset (hard links: no extra space)
+python src/train_detector.py train        # yolo26s at 1280 px; --model yolo26m for more accuracy
+```
+
+The result goes to `models/football_yolo26s.pt`, and every script then uses it automatically (newest `models/football_*.pt`, unless `--model` or `YOLO_MODEL` says otherwise). With it, tracks get the classes player / goalkeeper / referee, which then decide each person's role in `identify_teams.py`, and `ball_tracking.py` uses its ball class. The 49 SoccerNet test clips are never used for training, so they stay free for a fair evaluation later.
+
 ## 🎥 Player Tracking
 
 ```bash
@@ -106,10 +126,14 @@ On test1.mp4 the model finds the corner after the 0:54 save, the foul at 1:28 an
 ### Who is who: name → number → colour
 
 ```bash
-pip install easyocr
 python src/extract_jersey_crops.py
-python src/jersey_reading.py   --video data/videos/test1.mp4 [--roster roster.json]
+python src/jersey_reading.py   --video data/videos/test1.mp4 [--roster roster.json] [--ocr easyocr]
 python src/player_identity.py  --video data/videos/test1.mp4
+python src/speak_commentary.py --video data/videos/test1.mp4 [--voice edge]
 ```
 
 `jersey_reading.py` reads the name and number on each player's shirt from their best torso crops; a value is only accepted when at least two crops agree. With a roster (`{"team_a": {"7": "Rashford"}, ...}`) a read number becomes the player's name and a misread name snaps to the closest roster name. `player_identity.py` then fills the Bengali templates in `dataset.json` for every event, naming each player by the best thing we know: their name, else "৭ নম্বর জার্সির খেলোয়াড়", else "লাল জার্সির খেলোয়াড়". Templates with a `{jersey}` slot are only used when both name and number are known.
+
+Shirt text is read with **PARSeq** (Bautista & Atienza, ECCV 2022, `src/parseq_reader.py`), the scene-text recogniser the best published shirt-number readers build on; EasyOCR's CRAFT detector finds the text regions first, and only digits (or only letters) can be predicted. `--ocr easyocr` uses EasyOCR alone.
+
+`speak_commentary.py` speaks each line in Bengali at its event's video time (a line waits until the previous one is finished) and writes `outputs/tracking/test1_commentary.wav` plus `test1_commentary.mp4`, the video with the commentary over the quieter match sound. The default voice is Meta's MMS-TTS Bengali, offline (CC-BY-NC: research use); `--voice edge` uses Microsoft's neural Bengali voices (`bn-BD-PradeepNeural`, `--speaker female` for Nabanita), which sound more natural but need the internet.

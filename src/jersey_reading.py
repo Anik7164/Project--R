@@ -14,9 +14,11 @@ snapped to the closest roster name.
 Output: outputs/tracking/<name>_identities.csv
     track_id, name, name_source, jersey_number, number_votes, name_votes
 
-OCR uses EasyOCR (pip install easyocr; it downloads its model on first
-use). Any object with readtext(image, allowlist=...) returning
-[(box, text, confidence)] can be used instead.
+OCR: PARSeq by default (parseq_reader.py; text regions from EasyOCR's
+detector when EasyOCR is installed), or EasyOCR alone with --ocr easyocr.
+Both download their models into <project>/.cache on first use. Any
+object with readtext(image, allowlist=...) returning
+[(box, text, confidence)] can be used.
 
 Usage:
     python src/extract_jersey_crops.py
@@ -185,10 +187,15 @@ def main():
     parser.add_argument("--crops", type=Path, default=DEFAULT_CROPS)
     parser.add_argument("--roster", type=Path)
     parser.add_argument("--gpu", action="store_true")
+    parser.add_argument("--ocr", choices=["parseq", "easyocr"], default="parseq")
     args = parser.parse_args()
 
-    import easyocr
-    reader = easyocr.Reader(["en"], gpu=args.gpu)
+    if args.ocr == "parseq":
+        from parseq_reader import ParseqReader
+        reader = ParseqReader(gpu=args.gpu)
+    else:
+        import easyocr
+        reader = easyocr.Reader(["en"], gpu=args.gpu)
 
     name = args.video.stem
     teams = load_teams(TRACKING_DIR / f"{name}_teams.csv")
