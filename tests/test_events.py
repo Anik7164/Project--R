@@ -140,3 +140,26 @@ def test_ball_selector_rejects_jumps_and_interpolates():
     assert picked[:2] == (110, 102)
     filled = interpolate_gaps({0: (0.0, 0.0, 1.0), 4: (40.0, 0.0, 1.0)})
     assert filled[2][0] == 20.0 and filled[2][3] == "interpolated"
+
+
+def _closeup_with_card(advert=False):
+    import cv2
+    frame = np.full((360, 640, 3), (40, 140, 40), dtype=np.uint8)  # grass
+    if advert:
+        cv2.rectangle(frame, (250, 40), (420, 160), (0, 230, 255), -1)  # yellow board
+    cv2.rectangle(frame, (310, 60), (330, 95), (30, 30, 250), -1)       # red card
+    return frame
+
+
+def test_card_held_up_in_close_up_is_found():
+    from card_detection import card_candidates, held_up
+    candidates = card_candidates(_closeup_with_card())
+    assert [c[0] for c in candidates] == ["red"]
+    referee = (280.0, 110.0, 380.0, 360.0)  # standing right below the card
+    assert held_up(candidates[0], [referee])
+    assert not held_up(candidates[0], [(20.0, 110.0, 120.0, 360.0)])
+
+
+def test_red_patch_inside_an_advert_is_not_a_card():
+    from card_detection import card_candidates
+    assert card_candidates(_closeup_with_card(advert=True)) == []

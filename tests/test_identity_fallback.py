@@ -101,3 +101,13 @@ def test_goal_without_scorer_uses_team_colour():
     teams = {9: {"team": "team_b", "role": "player", "team_colour": "blue"}}
     [(_, line)] = commentary([event], {}, teams, TEMPLATES, random.Random(0))
     assert "নীল জার্সির খেলোয়াড়" in line
+
+
+def test_equaliser_is_not_called_breaking_the_deadlock():
+    event = {"type": "goal", "minute": 2, "players": [], "team": "team_b",
+             "score": "1-1", "side": "away"}
+    teams = {9: {"team": "team_b", "role": "player", "team_colour": "blue"}}
+    for seed in range(20):
+        [(_, line)] = commentary([event], {}, teams, TEMPLATES, random.Random(seed))
+        assert "ডেডলক" not in line and "এগিয়ে গেল" not in line
+        assert line.endswith("খেলায় ফিরল সমতা! স্কোর এখন ১-১।")

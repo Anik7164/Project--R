@@ -98,6 +98,45 @@ def fill_template(templates, minute, who, rng=random):
     )
 
 
+# Goal templates that only fit some situations, by a phrase they contain.
+OPENER_ONLY = ("ডেডলক",)            # "broke the deadlock"
+LEAD_ONLY = ("এগিয়ে গেল",)          # "the team went ahead"
+SECOND_YELLOW = "দ্বিতীয় হলুদ"        # red card "after a second yellow"
+
+
+def goal_situation(score, side):
+    """"opener", "lead", "equaliser" or "trailing" for the scoring side,
+    from the score after the goal ("2-1") and side ("home"/"away")."""
+    home, away = (int(v) for v in score.split("-"))
+    mine, theirs = (home, away) if side == "home" else (away, home)
+    if mine + theirs == 1:
+        return "opener"
+    if mine > theirs:
+        return "lead"
+    if mine == theirs:
+        return "equaliser"
+    return "trailing"
+
+
+def goal_templates(templates, situation):
+    """Leave out templates whose wording does not fit the situation."""
+    def fits(template):
+        if any(p in template for p in OPENER_ONLY):
+            return situation == "opener"
+        if any(p in template for p in LEAD_ONLY):
+            return situation in ("opener", "lead")
+        return True
+    return [t for t in templates if fits(t)]
+
+
+def score_sentence(score, situation):
+    """Bengali sentence announcing the new score."""
+    text = f"স্কোর এখন {bengali_number(score)}।"
+    if situation == "equaliser":
+        text = "খেলায় ফিরল সমতা! " + text
+    return text
+
+
 def video_time(seconds):
     """Seconds into the video as m:ss.s, e.g. 82.24 -> "1:22.2"."""
     minutes, rest = divmod(float(seconds), 60)
@@ -134,7 +173,21 @@ def commentary(events, identities, teams, templates_by_type, rng=random):
                 None,
             )
         who = describe(identities.get(track_id), team_info)
-        lines.append((event, fill_template(templates, event["minute"], who, rng)))
+        if event["type"] == "red_card" and not any(
+            e["type"] == "yellow_card" and e["frame"] < event["frame"]
+            and track_id is not None
+            and any(p["track_id"] == track_id for p in e["players"])
+            for e in events
+        ):
+            templates = [t for t in templates if SECOND_YELLOW not in t]
+        situation = None
+        if event["type"] == "goal" and event.get("score") and event.get("side"):
+            situation = goal_situation(event["score"], event["side"])
+            templates = goal_templates(templates, situation)
+        line = fill_template(templates, event["minute"], who, rng)
+        if line and situation:
+            line = f"{line} {score_sentence(event['score'], situation)}"
+        lines.append((event, line))
     return lines
 
 

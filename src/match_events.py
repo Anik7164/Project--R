@@ -41,6 +41,7 @@ Usage:
 import project_cache  # noqa: F401  keeps downloads/caches in <project>/.cache
 import argparse
 import csv
+import os
 import json
 from collections import defaultdict
 from dataclasses import dataclass
@@ -49,7 +50,7 @@ from pathlib import Path
 import cv2
 import numpy as np
 
-from card_detection import detect_card
+from card_detection import detect_card, find_shown_cards, yolo_people
 from scoreboard import find_score_changes, parse_score
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -79,6 +80,10 @@ SET_PIECE_WINDOW = 6.0
 CARD_FRAME_STEP = 2
 CARD_MIN_HITS = 3
 CARD_GAP = 1.0
+# Cards found both ways within this many seconds are one card.
+CARD_SAME_SECONDS = 5.0
+# Person detector for cards shown in close-ups.
+DEFAULT_MODEL = Path(os.environ.get("YOLO_MODEL", ROOT / "yolo26n.pt"))
 
 # SoccerNet-v2 action-spotting labels -> dataset.json event types.
 SOCCERNET_LABELS = {
@@ -391,8 +396,10 @@ def events_from_spotting(match, spotted, start_minute=0):
     return events
 
 
-def find_cards(match, video_path):
-    """[(first frame, "yellow_card" | "red_card")] seen in the video."""
+def find_cards(match, video_path, model_path=None):
+    """[(first frame, "yellow_card" | "red_card")] seen in the video:
+    next to a tracked referee, and (with a person detector model) held up
+    in close-ups where the referee is not tracked."""
     cap = cv2.VideoCapture(str(video_path))
     if not cap.isOpened():
         raise RuntimeError(f"Cannot open video: {video_path}")
@@ -428,10 +435,22 @@ def find_cards(match, video_path):
                 group = []
             if frame is not None:
                 group.append(frame)
+    if model_path is not None and Path(model_path).exists():
+        try:
+            people = yolo_people(model_path)
+        except ImportError:
+            people = None
+        if people is not None:
+            same = CARD_SAME_SECONDS * match.fps
+            for frame, card in find_shown_cards(video_path, people, match.fps):
+                if not any(c == card and abs(f - frame) <= same
+                           for f, c in cards):
+                    cards.append((frame, card))
     return sorted(cards)
 
 
-def events_from_rules(match, start_minute=0, video_path=None):
+def events_from_rules(match, start_minute=0, video_path=None,
+                      model_path=DEFAULT_MODEL):
     """Cards seen in the video, set pieces from a still ball, and the foul
     that caused each free kick."""
     touches = find_touches(match)
@@ -474,7 +493,7 @@ def events_from_rules(match, start_minute=0, video_path=None):
         fouls = sorted(
             (e for e in events if e["type"] == "foul"), key=lambda e: e["frame"]
         )
-        for frame, card in find_cards(match, video_path):
+        for frame, card in find_cards(match, video_path, model_path):
             earlier = [f for f in fouls if f["frame"] <= frame]
             players = attribute(match, touches, card, frame, earlier)
             events.append(_event(match, frame, card, players, 0.5,
