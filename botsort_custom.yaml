@@ -6,7 +6,8 @@ track_high_thresh: 0.35
 track_low_thresh: 0.10
 new_track_thresh: 0.40
 
-# Retain lost tracks for up to 60 frames
+# Retain lost tracks for up to 90 frames (3 s at 30 fps). Longer gaps
+# are bridged by the identity layer in src/identity.py.
 track_buffer: 90
 
 # Matching threshold
@@ -19,5 +20,9 @@ gmc_method: sparseOptFlow
 # BoT-SORT appearance/ReID settings
 proximity_thresh: 0.50
 appearance_thresh: 0.80
+# Off by default. YOLO26 is NMS-free, so `model: auto` cannot reuse its
+# features and Ultralytics downloads a generic ImageNet classifier
+# (yolo26n-cls.pt) instead. Turn this on once a football ReID model
+# (e.g. trained on SoccerNet-ReID) is available and set `model` to it.
 with_reid: false
 model: auto
