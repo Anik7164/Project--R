@@ -14,6 +14,7 @@ needs `pip install motmetrics`:
     python src/evaluate_tracking.py outputs/tracking/seq_tracks.csv --gt gt.txt
 """
 
+import project_cache  # noqa: F401  keeps downloads/caches in <project>/.cache
 import argparse
 import csv
 from collections import defaultdict

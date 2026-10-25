@@ -42,6 +42,14 @@ flowchart TD
 
 ---
 
+## 💾 Disk use
+
+Every script imports `src/project_cache.py` first, which points the PyTorch, Ultralytics, EasyOCR, Hugging Face and temp folders to `<project>/.cache`, so models and caches stay on the project's drive instead of the home folder (C: on Windows). For `pip` itself, run this once per terminal before installing:
+
+```powershell
+$env:PIP_CACHE_DIR = "$PWD\.cache\pip"; $env:TEMP = "$PWD\.cache\tmp"; $env:TMP = $env:TEMP
+```
+
 ## 🎥 Player Tracking
 
 ```bash

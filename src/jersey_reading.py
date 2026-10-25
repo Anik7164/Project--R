@@ -23,6 +23,7 @@ Usage:
     python src/jersey_reading.py --video data/videos/test1.mp4 [--roster roster.json]
 """
 
+import project_cache  # noqa: F401  keeps downloads/caches in <project>/.cache
 import argparse
 import csv
 import difflib

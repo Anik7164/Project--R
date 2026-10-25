@@ -1,4 +1,5 @@
 
+import project_cache  # noqa: F401  keeps downloads/caches in <project>/.cache
 from pathlib import Path
 from collections import defaultdict
 import csv

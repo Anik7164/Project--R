@@ -18,6 +18,7 @@ Usage:
     python src/ball_tracking.py --video data/videos/test1.mp4
 """
 
+import project_cache  # noqa: F401  keeps downloads/caches in <project>/.cache
 import argparse
 import csv
 from pathlib import Path

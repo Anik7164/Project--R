@@ -20,6 +20,7 @@ Usage:
     python src/track_players.py --video data/videos/test1.mp4
 """
 
+import project_cache  # noqa: F401  keeps downloads/caches in <project>/.cache
 import argparse
 import csv
 import os

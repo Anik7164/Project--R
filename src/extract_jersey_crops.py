@@ -1,4 +1,5 @@
 
+import project_cache  # noqa: F401  keeps downloads/caches in <project>/.cache
 import csv
 import math
 from pathlib import Path

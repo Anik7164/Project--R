@@ -38,6 +38,7 @@ Usage:
         [--spotting results_spotting.json] [--start-minute 0]
 """
 
+import project_cache  # noqa: F401  keeps downloads/caches in <project>/.cache
 import argparse
 import csv
 import json
