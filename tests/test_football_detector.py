@@ -60,6 +60,19 @@ def test_roles_from_detector(tmp_path):
             writer.writerow([frame, 3, "player" if frame < 5 else "referee"])
     assert detector_roles(path) == {1: "referee", 2: "player"}
 
+
+def test_close_ups_do_not_decide_roles(tmp_path):
+    path = tmp_path / "tracks.csv"
+    with path.open("w", newline="") as file:
+        writer = csv.writer(file)
+        writer.writerow(["frame", "track_id", "class_name", "y1", "y2"])
+        for frame in range(10):
+            writer.writerow([frame, 1, "referee", 100, 140])   # wide shot
+            writer.writerow([frame, 2, "referee", 100, 400])   # close-up
+        writer.writerow([0, 3, "goalkeeper", 100, 130])        # too few votes
+    assert detector_roles(path, frame_height=720) == {1: "referee"}
+    assert detector_roles(path) == {1: "referee", 2: "referee"}
+
     votes = TeamVotes()
     votes.votes[1].update({"team_a": 9, "other": 1})   # colour says player
     votes.votes[2].update({"other": 8, "team_b": 2})   # colour says outlier

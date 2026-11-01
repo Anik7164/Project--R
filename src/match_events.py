@@ -82,8 +82,18 @@ CARD_MIN_HITS = 3
 CARD_GAP = 1.0
 # Cards found both ways within this many seconds are one card.
 CARD_SAME_SECONDS = 5.0
-# Person detector for cards shown in close-ups.
-DEFAULT_MODEL = default_model()
+# Person detector for cards shown in close-ups. The COCO model finds
+# people in close-ups far better than the football model, which only saw
+# wide shots in training.
+COCO_MODEL = next((p for p in (ROOT / "yolo26n.pt",
+                               ROOT / ".cache" / "models" / "yolo26n.pt")
+                   if p.exists()), ROOT / "yolo26n.pt")
+DEFAULT_MODEL = COCO_MODEL if COCO_MODEL.exists() else default_model()
+# Cards next to a tracked referee are looked for only in wide shots
+# (referee box at most this share of the frame height); close-ups are
+# find_shown_cards' job, and a "referee" in a close-up is usually a
+# goalkeeper or a substitute in a bib.
+CARD_REFEREE_MAX_HEIGHT = 0.15
 
 # SoccerNet-v2 action-spotting labels -> dataset.json event types.
 SOCCERNET_LABELS = {
@@ -104,7 +114,14 @@ SOCCERNET_LABELS = {
 }
 # Lowest model confidence kept, per event type (default SPOTTING_THRESHOLD).
 SPOTTING_THRESHOLD = 0.35
-SPOTTING_THRESHOLDS = {"missed_shot": 0.45, "throw_in": 0.5}
+# Set pieces and shots are spotted wrongly at low confidence on highlight
+# reels (attacks, replays), so they need more. Checked on test1.mp4: the
+# real events scored 0.5+, the false free kicks and corner 0.35-0.43.
+SPOTTING_THRESHOLDS = {"missed_shot": 0.5, "throw_in": 0.5, "freekick": 0.5,
+                       "corner_kick": 0.5, "goal_kick": 0.5}
+# A card the model spots but nobody sees in the picture is kept only
+# with this much confidence (its colour is often wrong).
+UNSEEN_CARD_THRESHOLD = 0.6
 # After a goal comes the celebration, replays and the kick-off: no set
 # piece or shot can happen in this many seconds.
 AFTER_GOAL_SECONDS = 20.0
@@ -239,6 +256,8 @@ def merge_cards(spotted, seen_cards, fps):
             _, i = min(near)
             used.add(i)
             frame, card = seen_cards[i]
+        elif confidence < UNSEEN_CARD_THRESHOLD:
+            continue
         result.append((frame, card, confidence))
     for i, (frame, card) in enumerate(seen_cards):
         if i not in used:
@@ -478,7 +497,10 @@ def find_cards(match, video_path, model_path=None):
             if not referees:
                 continue
             others = [box for _, box in match.players(frame_number)]
+            max_height = CARD_REFEREE_MAX_HEIGHT * frame.shape[0]
             for _, box in referees:
+                if box[3] - box[1] > max_height:
+                    continue
                 colour = detect_card(frame, box, others)
                 if colour:
                     hits[colour].append(frame_number)

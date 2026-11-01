@@ -174,6 +174,12 @@ def test_spotted_cards_take_colour_and_time_from_the_picture():
     assert merged == [(2200, "foul", 0.38), (2378, "red_card", 0.65)]
 
 
+def test_unseen_weak_card_is_dropped():
+    from match_events import merge_cards
+    spotted = [(500, "yellow_card", 0.52), (2375, "yellow_card", 0.71)]
+    assert merge_cards(spotted, [], FPS) == [(2375, "yellow_card", 0.71)]
+
+
 def test_spotting_threshold_drops_weak_predictions(tmp_path):
     path = tmp_path / "spot.json"
     path.write_text(json.dumps({"predictions": [

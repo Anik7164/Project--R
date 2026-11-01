@@ -38,6 +38,12 @@ FRAME_STEP = 5
 # a player's role when this share of their boxes agree.
 ROLE_SHARE = 0.6
 DETECTOR_ROLES = {"player", "goalkeeper", "referee"}
+# The football detector learnt roles from wide broadcast shots only
+# (SoccerNet-Tracking). In close-ups it calls almost anyone in an unusual
+# kit a referee (the keeper, substitutes in bibs), so only boxes smaller
+# than this share of the frame height vote, and an ID needs a few votes.
+ROLE_MAX_HEIGHT = 0.10
+MIN_ROLE_VOTES = 3
 # Descriptors kept per player, so memory stays bounded on full matches.
 MAX_SAMPLES_PER_PLAYER = 40
 OVERLAP_LIMIT = 0.15
@@ -61,18 +67,27 @@ def read_track_rows(tracks_csv):
         yield current, rows
 
 
-def detector_roles(tracks_csv):
+def detector_roles(tracks_csv, frame_height=None):
     """{track_id: role} from the class_name column, when the tracks come
-    from a football detector; {} for a COCO "person" detector."""
+    from a football detector; {} for a COCO "person" detector.
+
+    With frame_height, close-up boxes (taller than ROLE_MAX_HEIGHT of the
+    frame) do not vote; IDs seen only in close-ups get no role here and
+    are decided by kit colour."""
+    max_height = frame_height * ROLE_MAX_HEIGHT if frame_height else None
     counts = defaultdict(Counter)
     with tracks_csv.open(newline="", encoding="utf-8") as file:
         for row in csv.DictReader(file):
-            if row.get("class_name") in DETECTOR_ROLES:
-                counts[int(row["track_id"])][row["class_name"]] += 1
+            if row.get("class_name") not in DETECTOR_ROLES:
+                continue
+            if max_height and row.get("y1") and row.get("y2"):
+                if float(row["y2"]) - float(row["y1"]) > max_height:
+                    continue
+            counts[int(row["track_id"])][row["class_name"]] += 1
     roles = {}
     for track_id, votes in counts.items():
         role, count = votes.most_common(1)[0]
-        if count >= ROLE_SHARE * sum(votes.values()):
+        if count >= MIN_ROLE_VOTES and count >= ROLE_SHARE * sum(votes.values()):
             roles[track_id] = role
     return roles
 
@@ -169,7 +184,10 @@ def main():
             raise FileNotFoundError(f"Required file not found: {path}")
 
     samples = collect_samples(args.video, tracks_csv)
-    roles = detector_roles(tracks_csv)
+    capture = cv2.VideoCapture(str(args.video))
+    frame_height = capture.get(cv2.CAP_PROP_FRAME_HEIGHT) or None
+    capture.release()
+    roles = detector_roles(tracks_csv, frame_height)
     if roles:
         print(f"Roles from the football detector for {len(roles)} IDs")
     classifier, decisions = identify_teams(samples, roles)
