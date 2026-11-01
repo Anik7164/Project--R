@@ -95,6 +95,15 @@ def sample_frames(video_path, fps=FEATURE_FPS):
     return np.array(frames), video_fps
 
 
+def expected_features(video_path):
+    """Number of features extract_features gives for this video."""
+    capture = cv2.VideoCapture(str(video_path))
+    frames = capture.get(cv2.CAP_PROP_FRAME_COUNT)
+    fps = capture.get(cv2.CAP_PROP_FPS) or 25.0
+    capture.release()
+    return int(frames / fps * FEATURE_FPS)
+
+
 def extract_features(video_path, batch_size=32):
     """(N, 2048) ResNet-152 features, one per half second."""
     from tensorflow import keras
@@ -229,9 +238,16 @@ def main():
     name = args.video.stem
     TRACKING_DIR.mkdir(parents=True, exist_ok=True)
     features_path = TRACKING_DIR / f"{name}_resnet152.npy"
+    features = None
     if features_path.exists():
         features = np.load(features_path)
-    else:
+        # Saved features belong to this video only if they cover its
+        # length (two per second); a new video with the same file name
+        # must not reuse the old one's features.
+        if abs(len(features) - expected_features(args.video)) > 2:
+            print(f"{features_path.name} is from another video; extracting again.")
+            features = None
+    if features is None:
         features = extract_features(args.video)
         np.save(features_path, features)
 
