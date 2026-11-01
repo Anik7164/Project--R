@@ -1,0 +1,5 @@
+git pull
+python setup_models.py
+python train_detector.py download
+python train_detector.py prepare
+python train_detector.py train
