@@ -51,5 +51,5 @@ wandb/
 data/SoccerNet/
 
 # Trained models (src/train_detector.py)
-models/
+
 data/football_det/
