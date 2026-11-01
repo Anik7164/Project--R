@@ -85,7 +85,7 @@ CARD_SAME_SECONDS = 5.0
 # Person detector for cards shown in close-ups. The COCO model finds
 # people in close-ups far better than the football model, which only saw
 # wide shots in training.
-COCO_MODEL = next((p for p in (ROOT / "yolo26n.pt",
+COCO_MODEL = next((p for p in (ROOT / "yolo26n.pt", ROOT / "weights" / "yolo26n.pt",
                                ROOT / ".cache" / "models" / "yolo26n.pt")
                    if p.exists()), ROOT / "yolo26n.pt")
 DEFAULT_MODEL = COCO_MODEL if COCO_MODEL.exists() else default_model()
