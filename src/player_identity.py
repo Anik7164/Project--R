@@ -24,6 +24,7 @@ import argparse
 import csv
 import json
 import random
+import string
 from pathlib import Path
 
 from appearance import BENGALI_COLOUR_NAMES
@@ -47,6 +48,18 @@ MAIN_ROLE = {
     "throw_in": "taker",
     "missed_shot": "player",
     "offside": "player",
+    "pass": "passer",
+    "long_pass": "passer",
+    "tackle_won": "tackler",
+    "interception": "interceptor",
+    "run_with_ball": "runner",
+}
+# Events about two players: {from_player} and {to_player}.
+SECOND_ROLE = {
+    "pass": "receiver",
+    "long_pass": "receiver",
+    "tackle_won": "opponent",
+    "interception": "passer",
 }
 
 
@@ -87,20 +100,46 @@ def describe(identity, team_info=None):
     }
 
 
-def fill_template(templates, minute, who, rng=random):
-    """Pick a template whose slots can all be filled, and fill it."""
-    usable = [
-        t for t in templates
-        if "{jersey}" not in t or (who["jersey"] and who["level"] == "name")
-    ]
+# Templates said recently are not picked again.
+RECENT_TEMPLATES = 8
+
+
+def _slots(template):
+    return {name for _, name, _, _ in string.Formatter().parse(template) if name}
+
+
+def fill_template(templates, minute, who, rng=random, extra=None, avoid=()):
+    """Pick a template whose slots can all be filled, and fill it.
+
+    who: the main player (describe()); extra: more slot values, e.g.
+    {"to_player": ..., "team_colour": ...}; a slot left None makes the
+    templates that need it unusable.
+    """
+    values = {"minute": bengali_number(minute)}
+    if who is not None:
+        values["player"] = values["from_player"] = who["player"]
+        if who["jersey"] and who["level"] == "name":
+            values["jersey"] = who["jersey"]
+    for key, value in (extra or {}).items():
+        if value:
+            values[key] = value
+    usable = [t for t in templates if _slots(t) <= set(values)]
     if not usable:
         return None
-    template = rng.choice(usable)
-    return template.format(
-        minute=bengali_number(minute),
-        jersey=who["jersey"] or "",
-        player=who["player"],
-    )
+    # Do not say the same sentence twice in a row when there is another.
+    fresh = [t for t in usable if t not in avoid] or usable
+    template = rng.choice(fresh)
+    if isinstance(avoid, list):
+        avoid.append(template)
+        del avoid[:-RECENT_TEMPLATES]
+    return template.format(**values)
+
+
+def team_label(colour):
+    """"কমলা জার্সির দল" for a kit colour."""
+    if not colour:
+        return None
+    return f"{BENGALI_COLOUR_NAMES.get(colour, colour)} জার্সির দল"
 
 
 # Goal templates that only fit some situations, by a phrase they contain.
@@ -160,8 +199,15 @@ def load_by_track(path):
 def commentary(events, identities, teams, templates_by_type, rng=random):
     """[(event, Bengali line or None)] for a list of match events."""
     lines = []
+    recent = []
     for event in events:
         templates = templates_by_type.get(event["type"], [])
+        if event["type"] == "match_intro":
+            extra = {"team": team_label(event.get("team_colour")),
+                     "opponent": team_label(event.get("opponent_colour"))}
+            lines.append((event, fill_template(templates, event["minute"],
+                                               None, rng, extra)))
+            continue
         role = MAIN_ROLE.get(event["type"])
         main = next(
             (p for p in event["players"] if p["role"] == role),
@@ -189,7 +235,18 @@ def commentary(events, identities, teams, templates_by_type, rng=random):
         if event["type"] == "goal" and event.get("score") and event.get("side"):
             situation = goal_situation(event["score"], event["side"])
             templates = goal_templates(templates, situation)
-        line = fill_template(templates, event["minute"], who, rng)
+        extra = {}
+        second_role = SECOND_ROLE.get(event["type"])
+        second = next((p for p in event["players"] if p["role"] == second_role),
+                      None) if second_role else None
+        if second is not None:
+            other = describe(identities.get(second["track_id"]),
+                             teams.get(second["track_id"]))
+            if other["player"] != who["player"] or other["level"] == "name":
+                extra["to_player"] = other["player"]
+        if team_info:
+            extra["team"] = team_label(team_info.get("team_colour"))
+        line = fill_template(templates, event["minute"], who, rng, extra, recent)
         if line and situation:
             line = f"{line} {score_sentence(event['score'], situation)}"
         lines.append((event, line))

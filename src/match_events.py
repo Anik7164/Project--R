@@ -144,6 +144,7 @@ class MatchData:
     teams: dict       # track_id -> {"team", "role"}
     ball: dict        # frame -> (x, y, sx, sy, scene)
     team_colours: dict = None  # team -> shirt colour name
+    ball_detected: set = None  # frames where the ball was seen, not interpolated
 
     def team(self, track_id):
         return self.teams.get(track_id, {}).get("team")
@@ -193,14 +194,17 @@ def load_match(tracks_csv, teams_csv, ball_csv, fps):
                     team_colours[row["team"]] = row["team_colour"]
 
     ball = {}
+    ball_detected = set()
     with Path(ball_csv).open(newline="", encoding="utf-8") as file:
         for row in csv.DictReader(file):
+            if row.get("source", "detected") == "detected":
+                ball_detected.add(int(row["frame"]))
             ball[int(row["frame"])] = (
                 float(row["x"]), float(row["y"]),
                 float(row["sx"]), float(row["sy"]), int(row["scene"]),
             )
     return MatchData(fps=fps, tracks=dict(tracks), teams=teams, ball=ball,
-                     team_colours=team_colours)
+                     team_colours=team_colours, ball_detected=ball_detected)
 
 
 def load_spotting(path, fps, half=1, threshold=None):
@@ -652,6 +656,25 @@ def goals_from_scoreboard(match, video_path, start_score=(0, 0),
     return events
 
 
+def add_play_events(match, events, start_minute=0):
+    """Passes, tackles, runs (play_events.py) between the bigger events,
+    and a team introduction at the start."""
+    import play_events
+
+    found = play_events.candidates(match, find_touches(match))
+    kept = play_events.thin_out(found, match.fps, [e["frame"] for e in events])
+    play = [_event(match, frame, kind, players, 0.5, "possession", start_minute)
+            for frame, kind, players in kept]
+    intro = play_events.match_intro(match)
+    if intro:
+        first = min(match.tracks) if match.tracks else 0
+        event = _event(match, first, "match_intro", [], 1.0, "teams",
+                       start_minute)
+        event.update(intro)
+        play.append(event)
+    return sorted(events + play, key=lambda e: e["frame"])
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
     parser.add_argument("--video", type=Path, required=True,
@@ -672,6 +695,9 @@ def main():
                         help="match minute at the start of the video")
     parser.add_argument("--start-score", default="0-0",
                         help="score shown at the start of the video")
+    parser.add_argument("--no-play", action="store_true",
+                        help="leave out passes, tackles, runs and the "
+                             "team introduction (play_events.py)")
     parser.add_argument("--no-scoreboard", action="store_true",
                         help="do not read goals from the score graphic")
     args = parser.parse_args()
@@ -716,11 +742,16 @@ def main():
             ] + goals
             events.sort(key=lambda e: e["frame"])
 
+    if not args.no_play:
+        events = add_play_events(match, events, args.start_minute)
+
     output = TRACKING_DIR / f"{name}_events.json"
     output.write_text(json.dumps(events, indent=2, ensure_ascii=False),
                       encoding="utf-8")
     for event in events:
         who = ", ".join(f"{p['role']} P{p['track_id']}" for p in event["players"])
+        if event["type"] == "match_intro":
+            who = f"{event['team_colour']} v {event['opponent_colour']}"
         score = f" ({event['score']})" if "score" in event else ""
         print(f"{event['minute']:>3}'  {event['type']:<12} {who}{score}")
     print("Events:", output)
