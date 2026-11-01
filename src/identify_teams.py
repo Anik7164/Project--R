@@ -173,6 +173,11 @@ def main():
     parser.add_argument("--video", type=Path, default=DEFAULT_VIDEO)
     parser.add_argument("--tracks", type=Path, help="tracks CSV")
     parser.add_argument("--output", type=Path, help="teams CSV")
+    parser.add_argument(
+        "--colours", nargs="+", metavar="TEAM=COLOUR",
+        help="name the kit colours yourself when the automatic names are "
+             "wrong (camera colours vary), e.g. team_a=orange "
+             "\"team_b=sky blue\". Names: " + ", ".join(BENGALI_COLOUR_NAMES))
     args = parser.parse_args()
 
     name = args.video.stem
@@ -191,6 +196,16 @@ def main():
     if roles:
         print(f"Roles from the football detector for {len(roles)} IDs")
     classifier, decisions = identify_teams(samples, roles)
+    for item in args.colours or []:
+        team, _, colour = item.partition("=")
+        if colour not in BENGALI_COLOUR_NAMES:
+            raise SystemExit(f"Unknown colour {colour!r}; use one of: "
+                             + ", ".join(BENGALI_COLOUR_NAMES))
+        classifier.colours[team] = colour
+        for d in decisions.values():
+            if d["team"] == team:
+                d["team_colour"] = colour
+                d["team_colour_bn"] = BENGALI_COLOUR_NAMES[colour]
 
     with output_csv.open("w", newline="", encoding="utf-8") as file:
         writer = csv.writer(file)
