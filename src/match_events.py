@@ -666,7 +666,8 @@ def main():
                         help="use the simple rules even if spotting results "
                              "exist")
     parser.add_argument("--half", type=int, default=1)
-    parser.add_argument("--fps", type=float, default=25.0)
+    parser.add_argument("--fps", type=float, default=None,
+                        help="default: the video's own frame rate")
     parser.add_argument("--start-minute", type=int, default=0,
                         help="match minute at the start of the video")
     parser.add_argument("--start-score", default="0-0",
@@ -676,6 +677,10 @@ def main():
     args = parser.parse_args()
 
     name = args.video.stem
+    if args.fps is None:
+        capture = cv2.VideoCapture(str(args.video))
+        args.fps = capture.get(cv2.CAP_PROP_FPS) or 25.0
+        capture.release()
     match = load_match(
         TRACKING_DIR / f"{name}_tracks.csv",
         TRACKING_DIR / f"{name}_teams.csv",
