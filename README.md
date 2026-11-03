@@ -81,7 +81,18 @@ python src/train_detector.py auto-finetune "data/videos/test1 5.mp4" data/videos
 
 It runs the current model on 3-second windows (every 6 s) at a low confidence, links the ball candidates across frames with camera motion removed, and keeps only tracks that last, move like a ball, are confidently seen at least once and are on the grass. Faint detections on such a track and 1-2 frame misses where the ball goes straight on become labels; candidates off the track (caps in the crowd, socks, line marks) get none. See `src/auto_label.py`. On a 10-window test of a local match, 75 frames were labelled and about 68 of the ball boxes were right by eye. This is self-training: it helps less than hand labels, but it costs nothing. More different videos help more than more frames of one video. Frames you later correct by hand are never overwritten by a new auto-label run.
 
-*Hand-checked (more accurate, slower):*
+Tried on 3 local matches (592 frames), the automatic fine-tune found the ball in a held-out match only 0.6% more often (9,152 vs 9,098 frames): its labels are mostly balls the model already saw. The balls it misses completely need a person.
+
+*Click the ball (about 10 minutes, recommended):* only the frames where the model is unsure are shown; click the ball (a magnifier helps), or press N if no ball is visible. The box is drawn for you.
+
+```powershell
+python src/click_balls.py data/videos/match1.mp4 data/videos/match2.mp4 data/videos/match3.mp4 --frames 300
+python src/train_detector.py finetune     # validation is on your clicked frames only
+```
+
+Run `click_balls.py` again to label more; frames already done are not shown again.
+
+*Hand-checked in a labelling tool (slowest):*
 
 ```powershell
 python src/train_detector.py label-frames data/videos/match2.mp4 data/videos/match3.mp4 --limit 300

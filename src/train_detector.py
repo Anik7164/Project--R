@@ -259,6 +259,17 @@ AUTO_LIST = LOCAL / "auto_labelled.txt"
 GRASS_SHARE = 0.4
 
 
+# Frames you labelled by hand with click_balls.py: validation uses these,
+# as they are the only real labels of your own footage.
+HAND_LIST = LOCAL / "hand_labelled.txt"
+
+
+def _hand_stems():
+    if not HAND_LIST.exists():
+        return set()
+    return set(HAND_LIST.read_text().split())
+
+
 def _auto_stems():
     if not AUTO_LIST.exists():
         return set()
@@ -499,10 +510,16 @@ def prepare_local(validation_share=0.15, soccernet_share=0.5):
     remap = None
     counts = {"train": 0, "val": 0}
     balls = {"train": 0, "val": 0}
+    # With hand-labelled frames, validation is the last part of those only
+    # (automatic labels are not a fair test); otherwise of all frames.
+    hand = _hand_stems()
     for frames in by_video.values():
-        cut = len(frames) - max(1, int(round(len(frames) * validation_share)))
-        for position, image in enumerate(sorted(frames)):
-            split = "train" if position < cut else "val"
+        frames = sorted(frames)
+        checkable = [f for f in frames if f.stem in hand] if hand else frames
+        cut = len(checkable) - max(1, int(round(len(checkable) * validation_share)))
+        val = set(checkable[cut:]) if checkable else set()
+        for image in frames:
+            split = "val" if image in val else "train"
             label = LOCAL / "labels" / f"{image.stem}.txt"
             _link(image, LOCAL_DATASET / "images" / split / image.name)
             lines = [line.split() for line in label.read_text().splitlines() if line.strip()]
@@ -539,6 +556,8 @@ def prepare_local(validation_share=0.15, soccernet_share=0.5):
         + "".join(f"  {i}: {n}\n" for i, n in enumerate(CLASSES)), encoding="utf-8")
     for split in ("train", "val"):
         print(f"{split}: {counts[split]} of your frames, {balls[split]} ball boxes")
+    if hand:
+        print("Validation: your hand-labelled frames only")
     print("Dataset:", config)
     return config
 
@@ -648,6 +667,13 @@ def main():
     af.add_argument("--batch", type=int, default=-1)
     af.add_argument("--device", default=None)
     af.add_argument("--workers", type=int, default=4)
+    ft = sub.add_parser("finetune",
+                        help="prepare-local + train from models/football_yolo26s.pt (after click_balls.py)")
+    ft.add_argument("--model", type=Path, help="model to start from")
+    ft.add_argument("--epochs", type=int, default=40)
+    ft.add_argument("--batch", type=int, default=-1)
+    ft.add_argument("--device", default=None)
+    ft.add_argument("--workers", type=int, default=4)
     pl = sub.add_parser("prepare-local", help="dataset from your corrected frames")
     pl.add_argument("--soccernet-share", type=float, default=0.5,
                     help="share of SoccerNet frames mixed into training (0 = none)")
@@ -676,6 +702,11 @@ def main():
     elif args.command == "auto-finetune":
         auto_finetune(args.videos, args.model, args.limit, args.every, args.rounds,
                       args.epochs, args.batch, args.device, args.workers)
+    elif args.command == "finetune":
+        start = args.model or MODELS / "football_yolo26s.pt"
+        prepare_local()
+        train(str(start), args.epochs, args.batch, device=args.device,
+              workers=args.workers, data="local")
     elif args.command == "import-labels":
         import_labels(args.export_dir)
     elif args.command == "prepare-local":
