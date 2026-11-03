@@ -252,6 +252,174 @@ def label_frames(videos, every=2.0, limit=400, model=None, conf=0.15,
     return saved
 
 
+# Frames labelled by auto-label; only these may be overwritten by a later
+# auto-label run (frames you corrected by hand are never touched).
+AUTO_LIST = LOCAL / "auto_labelled.txt"
+# Share of grass-coloured pixels around an auto-labelled ball.
+GRASS_SHARE = 0.4
+
+
+def _auto_stems():
+    if not AUTO_LIST.exists():
+        return set()
+    return set(AUTO_LIST.read_text().split())
+
+
+def _yolo_row(class_index, x1, y1, x2, y2, width, height):
+    return (f"{class_index} {(x1 + x2) / 2 / width:.6f} {(y1 + y2) / 2 / height:.6f} "
+            f"{(x2 - x1) / width:.6f} {(y2 - y1) / height:.6f}")
+
+
+def auto_label(videos, model=None, window=3.0, every=6.0, frame_gap=6,
+               limit=1500, batch=8, device=None):
+    """Label frames of your videos with no hand work (see auto_label.py).
+
+    Windows of `window` seconds every `every` seconds are run through the
+    detector frame by frame; inside a window frames are saved at least
+    `frame_gap` frames apart, at most `limit` frames over all videos.
+    Writes data/local_det/images + labels like label-frames, with the
+    ball and the people in the label; frames you corrected by hand are
+    never overwritten.
+    """
+    import cv2
+    import numpy as np
+    import torch
+    from ultralytics import YOLO
+
+    from auto_label import LOW_CONFIDENCE, ball_labels, pick_frames
+    from ball_tracking import compose, invert
+    from camera_motion import CameraMotionEstimator, warp_points
+    from detector_classes import default_model
+
+    model_path = Path(model or default_model())
+    detector = YOLO(str(model_path))
+    names = detector.names
+    index = {i: CLASSES.index(n) for i, n in names.items() if n in CLASSES}
+    if len(index) != len(CLASSES):
+        raise SystemExit("Auto-labelling needs the football model "
+                         "(player/goalkeeper/referee/ball); give --model.")
+    ball = CLASSES.index("ball")
+    if device is None:
+        device = 0 if torch.cuda.is_available() else "cpu"
+    for folder in ("images", "labels"):
+        (LOCAL / folder).mkdir(parents=True, exist_ok=True)
+    (LOCAL / "classes.txt").write_text("\n".join(CLASSES) + "\n")
+    auto = _auto_stems()
+    print(f"Auto-labelling with {model_path.name}")
+
+    per_video = max(1, limit // len(videos))
+    stats = {"frames": 0, "detected": 0, "faint": 0, "filled": 0, "no_ball": 0}
+    for video in videos:
+        capture = cv2.VideoCapture(str(video))
+        if not capture.isOpened():
+            raise SystemExit(f"Cannot open video: {video}")
+        fps = capture.get(cv2.CAP_PROP_FPS) or 25.0
+        total = int(capture.get(cv2.CAP_PROP_FRAME_COUNT))
+        span, step = max(2, int(window * fps)), max(1, int(every * fps))
+        starts = list(range(0, max(1, total - span), step))
+        per_window = max(1, per_video // max(1, len(starts)))
+        saved_here = 0
+        for number, start in enumerate(starts):
+            if saved_here >= per_video:
+                break
+            capture.set(cv2.CAP_PROP_POS_FRAMES, start)
+            frames = []
+            for _ in range(span):
+                ok, frame = capture.read()
+                if not ok:
+                    break
+                frames.append(frame)
+            if len(frames) < 2:
+                continue
+            height, width = frames[0].shape[:2]
+
+            # Camera motion: every frame mapped back to the first frame of
+            # its shot, so a panning camera does not bend the ball's path.
+            camera = CameraMotionEstimator()
+            shot, cumulative = 0, np.eye(3)[:2]
+            shots, to_frame = [], []
+            for frame in frames:
+                warp, cut = camera.update(frame)
+                if cut:
+                    shot, cumulative = shot + 1, np.eye(3)[:2]
+                else:
+                    cumulative = compose(cumulative, warp)
+                shots.append(shot)
+                to_frame.append(cumulative)
+
+            candidates, people = {}, {}
+            for first in range(0, len(frames), batch):
+                results = detector.predict(frames[first:first + batch], imgsz=IMAGE_SIZE,
+                                           conf=LOW_CONFIDENCE, device=device, verbose=False)
+                for offset, result in enumerate(results):
+                    i = first + offset
+                    candidates[i], people[i] = [], []
+                    for box, cls, score in zip(result.boxes.xyxy.tolist(),
+                                               result.boxes.cls.tolist(),
+                                               result.boxes.conf.tolist()):
+                        x1, y1, x2, y2 = box
+                        if index[int(cls)] == ball:
+                            sx, sy = warp_points([[(x1 + x2) / 2, (y1 + y2) / 2]],
+                                                 invert(to_frame[i]))[0]
+                            candidates[i].append((float(sx), float(sy), x2 - x1, y2 - y1, score))
+                        elif score >= AUTO_PEOPLE_CONFIDENCE:
+                            people[i].append(_yolo_row(index[int(cls)], x1, y1, x2, y2,
+                                                       width, height))
+
+            hsv = {}
+
+            def on_grass(i, box):
+                """Is there grass around the ball? (not a cap in the crowd)"""
+                if i not in hsv:
+                    hsv[i] = cv2.cvtColor(frames[i], cv2.COLOR_BGR2HSV)
+                sx, sy, w, h = box
+                x, y = warp_points([[sx, sy]], to_frame[i])[0]
+                r = 2.5 * max(w, h, 6)
+                patch = hsv[i][int(max(0, y - r)):int(min(height, y + r)),
+                               int(max(0, x - r)):int(min(width, x + r))]
+                if patch.size == 0:
+                    return False
+                green = ((patch[..., 0] >= 30) & (patch[..., 0] <= 90)
+                         & (patch[..., 1] >= 40))
+                return green.mean() >= GRASS_SHARE
+
+            labels = {}
+            for s in set(shots):
+                labels.update(ball_labels(
+                    {i: c for i, c in candidates.items() if shots[i] == s}, width,
+                    keep=on_grass))
+            if not labels:
+                stats["no_ball"] += 1
+                continue
+            for i in pick_frames(labels, frame_gap, per_window):
+                name = f"{Path(video).stem}_{start + i:06d}"
+                label_file = LOCAL / "labels" / f"{name}.txt"
+                if label_file.exists() and name not in auto:
+                    continue  # labelled (or corrected) by hand: keep it
+                sx, sy, w, h, source = labels[i]
+                x, y = warp_points([[sx, sy]], to_frame[i])[0]
+                rows = [_yolo_row(ball, x - w / 2, y - h / 2, x + w / 2, y + h / 2,
+                                  width, height)] + people[i]
+                cv2.imwrite(str(LOCAL / "images" / f"{name}.jpg"), frames[i])
+                label_file.write_text("\n".join(rows) + "\n")
+                auto.add(name)
+                stats["frames"] += 1
+                stats[source] += 1
+                saved_here += 1
+            if (number + 1) % 10 == 0:
+                print(f"{Path(video).name}: window {number + 1}/{len(starts)}, "
+                      f"{saved_here} frames labelled")
+        capture.release()
+
+    AUTO_LIST.write_text("\n".join(sorted(auto)) + "\n")
+    print(f"\n{stats['frames']} frames labelled automatically in {LOCAL}:")
+    print(f"  ball seen clearly by the model:      {stats['detected']}")
+    print(f"  faint ball confirmed by its motion:  {stats['faint']}")
+    print(f"  missed ball placed from its motion:  {stats['filled']}")
+    print(f"  ({stats['no_ball']} windows where the ball could not be followed were skipped)")
+    return stats
+
+
 def import_labels(export_dir):
     """Copy corrected labels from a labelling tool's YOLO export back to
     data/local_det/labels.
@@ -281,6 +449,7 @@ def import_labels(export_dir):
 
     known = {p.stem for p in (LOCAL / "images").glob("*.jpg")}
     imported, unknown_files = 0, []
+    corrected = set()
     for label in export_dir.rglob("*.txt"):
         if label.name == "classes.txt":
             continue
@@ -293,7 +462,11 @@ def import_labels(export_dir):
         if remap:
             lines = [[str(remap[int(p[0])])] + p[1:] for p in lines]
         (LOCAL / "labels" / f"{stem}.txt").write_text("".join(" ".join(p) + "\n" for p in lines))
+        corrected.add(stem)
         imported += 1
+    auto = _auto_stems()
+    if auto & corrected:  # now corrected by hand: auto-label must keep them
+        AUTO_LIST.write_text("\n".join(sorted(auto - corrected)) + "\n")
     print(f"Imported {imported} corrected label files into {LOCAL / 'labels'}")
     if unknown_files:
         print(f"{len(unknown_files)} files did not match a frame from label-frames, "
@@ -374,6 +547,31 @@ def prepare_local(validation_share=0.15, soccernet_share=0.5):
 # Training
 # ----------------------------------------------------------------------
 
+def auto_finetune(videos, model=None, limit=1500, every=6.0, rounds=1,
+                  epochs=30, batch=-1, device=None, workers=4):
+    """auto-label -> prepare-local -> train, with no hand work.
+
+    Always fine-tunes the starting model (not the previous round's), so a
+    second round only changes the labels: the better model finds more
+    balls, and those become the next round's labels.
+    """
+    start = Path(model) if model else MODELS / "football_yolo26s.pt"
+    if not start.exists():
+        from detector_classes import default_model
+        start = default_model()
+    labeller = start
+    for round_number in range(1, rounds + 1):
+        print(f"\n=== Round {round_number}/{rounds}: labelling with {Path(labeller).name} ===")
+        auto_label(videos, labeller, every=every, limit=limit, device=device)
+        prepare_local()
+        labeller = train(str(start), epochs, batch, device=device, workers=workers,
+                         data="local")
+    print("\nDone. The scripts now use", labeller, "(the newest models/football_*.pt).")
+    print("Check it: run ball_tracking.py on your video and compare the "
+          "'Ball in N/M frames' line with the old model's.")
+    return labeller
+
+
 def train(model="yolo26s", epochs=50, batch=-1, image_size=IMAGE_SIZE,
           device=None, workers=4, name=None, data="soccernet"):
     import torch
@@ -430,6 +628,26 @@ def main():
     il = sub.add_parser("import-labels",
                         help="corrected labels from a YOLO export (e.g. Roboflow)")
     il.add_argument("export_dir", type=Path, help="the unzipped export folder")
+    al = sub.add_parser("auto-label",
+                        help="label the ball in your videos automatically (no hand work)")
+    al.add_argument("videos", nargs="+", type=Path)
+    al.add_argument("--model", type=Path, help="default: the newest models/football_*.pt")
+    al.add_argument("--limit", type=int, default=1500, help="frames in all")
+    al.add_argument("--every", type=float, default=6.0,
+                    help="seconds between the 3-second windows that are read")
+    af = sub.add_parser("auto-finetune",
+                        help="auto-label, build the dataset and fine-tune, in one go")
+    af.add_argument("videos", nargs="+", type=Path)
+    af.add_argument("--model", type=Path, help="model to start from "
+                    "(default: models/football_yolo26s.pt, else the newest football model)")
+    af.add_argument("--limit", type=int, default=1500, help="frames in all")
+    af.add_argument("--every", type=float, default=6.0)
+    af.add_argument("--rounds", type=int, default=1,
+                    help="2: label again with the fine-tuned model and train once more")
+    af.add_argument("--epochs", type=int, default=30)
+    af.add_argument("--batch", type=int, default=-1)
+    af.add_argument("--device", default=None)
+    af.add_argument("--workers", type=int, default=4)
     pl = sub.add_parser("prepare-local", help="dataset from your corrected frames")
     pl.add_argument("--soccernet-share", type=float, default=0.5,
                     help="share of SoccerNet frames mixed into training (0 = none)")
@@ -453,6 +671,11 @@ def main():
     elif args.command == "label-frames":
         label_frames(args.videos, args.every, args.limit, args.model,
                      ball_only=not args.all_classes)
+    elif args.command == "auto-label":
+        auto_label(args.videos, args.model, every=args.every, limit=args.limit)
+    elif args.command == "auto-finetune":
+        auto_finetune(args.videos, args.model, args.limit, args.every, args.rounds,
+                      args.epochs, args.batch, args.device, args.workers)
     elif args.command == "import-labels":
         import_labels(args.export_dir)
     elif args.command == "prepare-local":

@@ -70,7 +70,18 @@ python src/train_detector.py train        # yolo26s at 1280 px; --model yolo26m 
 
 The result goes to `models/football_yolo26s.pt`, and every script then uses it automatically (newest `models/football_*.pt`, unless `--model` or `YOLO_MODEL` says otherwise). With it, tracks get the classes player / goalkeeper / referee, which then decide each person's role in `identify_teams.py`, and `ball_tracking.py` uses its ball class. The 49 SoccerNet test clips are never used for training, so they stay free for a fair evaluation later.
 
-**Fine-tune on your own footage.** SoccerNet is TV broadcast; a match filmed from the stands looks different, and the ball is found far less often. Label some of your own frames and fine-tune. Only the ball needs checking: player boxes are taken from the current model (already mAP50 0.97).
+**Fine-tune on your own footage.** SoccerNet is TV broadcast; a match filmed from the stands looks different, and the ball is found far less often. Fine-tune on your own videos, either fully automatically or with hand-checked labels. Only the ball needs checking: player boxes are taken from the current model (already mAP50 0.97).
+
+*Automatic (no hand work):* one command labels the ball in your videos and fine-tunes.
+
+```powershell
+python src/train_detector.py auto-finetune "data/videos/test1 5.mp4" data/videos/match2.mp4
+#   --rounds 2 labels again with the fine-tuned model and trains once more (twice the time, usually more balls)
+```
+
+It runs the current model on 3-second windows (every 6 s) at a low confidence, links the ball candidates across frames with camera motion removed, and keeps only tracks that last, move like a ball, are confidently seen at least once and are on the grass. Faint detections on such a track and 1-2 frame misses where the ball goes straight on become labels; candidates off the track (caps in the crowd, socks, line marks) get none. See `src/auto_label.py`. On a 10-window test of a local match, 75 frames were labelled and about 68 of the ball boxes were right by eye. This is self-training: it helps less than hand labels, but it costs nothing. More different videos help more than more frames of one video. Frames you later correct by hand are never overwritten by a new auto-label run.
+
+*Hand-checked (more accurate, slower):*
 
 ```powershell
 python src/train_detector.py label-frames data/videos/match2.mp4 data/videos/match3.mp4 --limit 300
