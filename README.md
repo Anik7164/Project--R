@@ -70,18 +70,19 @@ python src/train_detector.py train        # yolo26s at 1280 px; --model yolo26m 
 
 The result goes to `models/football_yolo26s.pt`, and every script then uses it automatically (newest `models/football_*.pt`, unless `--model` or `YOLO_MODEL` says otherwise). With it, tracks get the classes player / goalkeeper / referee, which then decide each person's role in `identify_teams.py`, and `ball_tracking.py` uses its ball class. The 49 SoccerNet test clips are never used for training, so they stay free for a fair evaluation later.
 
-**Fine-tune on your own footage.** SoccerNet is TV broadcast; a match filmed from the stands looks different, and the ball is found far less often. Label some of your own frames and fine-tune:
+**Fine-tune on your own footage.** SoccerNet is TV broadcast; a match filmed from the stands looks different, and the ball is found far less often. Label some of your own frames and fine-tune. Only the ball needs checking: player boxes are taken from the current model (already mAP50 0.97).
 
 ```powershell
-python src/train_detector.py label-frames data/videos/match2.mp4 data/videos/match3.mp4 --limit 600
-#   -> data/local_det/images + labels: the current model's boxes, to correct by hand in any
-#      YOLO-format labelling tool (classes.txt has the order: player, goalkeeper, referee, ball).
-#      Fix every ball (add missed ones, delete wrong ones); players matter less.
-python src/train_detector.py prepare-local          # your frames + an equal number of SoccerNet frames
+python src/train_detector.py label-frames data/videos/match2.mp4 data/videos/match3.mp4 --limit 300
+#   -> data/local_det/images + labels (only the model's ball boxes) and people/ (its player boxes, kept aside).
+#      Upload images + labels + classes.txt to a labelling tool (e.g. Roboflow), fix the ball in each
+#      frame (add a missed ball, delete a wrong one, nothing if no ball is visible), export as YOLO.
+python src/train_detector.py import-labels path/to/unzipped/export   # handles renamed files and class order
+python src/train_detector.py prepare-local          # your frames (+ player boxes) + as many SoccerNet frames
 python src/train_detector.py train --data local --model models/football_yolo26s.pt --epochs 40
 ```
 
-The result is `models/football_yolo26s_local.pt`, which the scripts then use. Running `label-frames` again adds new frames and never overwrites a label file that is already there. Validation uses the last part of each video, so check that its ball mAP50 goes up.
+`--all-classes` on label-frames puts the player boxes in the labels to correct as well. The result is `models/football_yolo26s_local.pt`, which the scripts then use. Running `label-frames` again adds new frames and never overwrites a label file that is already there. Validation uses the last part of each video, so check that its ball mAP50 goes up.
 
 ## 🎥 Player Tracking
 

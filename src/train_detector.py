@@ -170,7 +170,13 @@ def prepare(source=None, stride=FRAME_STRIDE, validation=VALIDATION_CLIPS):
 # Your own footage
 # ----------------------------------------------------------------------
 
-def label_frames(videos, every=2.0, limit=400, model=None, conf=0.15):
+# Ball-only labelling: player boxes above this confidence are taken from
+# the model as they are (they are already good: mAP50 0.97).
+AUTO_PEOPLE_CONFIDENCE = 0.5
+
+
+def label_frames(videos, every=2.0, limit=400, model=None, conf=0.15,
+                 ball_only=True):
     """Save frames from your videos with the current model's boxes as
     YOLO labels, to be corrected by hand.
 
@@ -179,6 +185,11 @@ def label_frames(videos, every=2.0, limit=400, model=None, conf=0.15):
     ball is more often there to fix than to draw. Output:
     data/local_det/images/*.jpg, data/local_det/labels/*.txt and
     data/local_det/classes.txt (the class order the labels use).
+
+    ball_only (default): the labels to correct hold only the ball; the
+    model's player/goalkeeper/referee boxes are kept aside in
+    data/local_det/people/ and added back by prepare-local. Only the ball
+    has to be checked, a few seconds per frame.
     """
     import cv2
     from ultralytics import YOLO
@@ -193,6 +204,7 @@ def label_frames(videos, every=2.0, limit=400, model=None, conf=0.15):
                          "(player/goalkeeper/referee/ball); give --model.")
     (LOCAL / "images").mkdir(parents=True, exist_ok=True)
     (LOCAL / "labels").mkdir(parents=True, exist_ok=True)
+    (LOCAL / "people").mkdir(parents=True, exist_ok=True)
     (LOCAL / "classes.txt").write_text("\n".join(CLASSES) + "\n")
 
     per_video = max(1, limit // len(videos))
@@ -215,20 +227,78 @@ def label_frames(videos, every=2.0, limit=400, model=None, conf=0.15):
                 continue  # already there, maybe corrected by hand: keep it
             height, width = frame.shape[:2]
             result = model.predict(frame, imgsz=IMAGE_SIZE, conf=conf, verbose=False)[0]
-            rows = []
-            for box, cls in zip(result.boxes.xyxy.tolist(), result.boxes.cls.tolist()):
+            rows, people = [], []
+            for box, cls, score in zip(result.boxes.xyxy.tolist(), result.boxes.cls.tolist(),
+                                       result.boxes.conf.tolist()):
                 x1, y1, x2, y2 = box
-                rows.append(f"{index[names[int(cls)]]} {(x1 + x2) / 2 / width:.6f} "
-                            f"{(y1 + y2) / 2 / height:.6f} {(x2 - x1) / width:.6f} "
-                            f"{(y2 - y1) / height:.6f}")
+                class_index = index[names[int(cls)]]
+                row = (f"{class_index} {(x1 + x2) / 2 / width:.6f} "
+                       f"{(y1 + y2) / 2 / height:.6f} {(x2 - x1) / width:.6f} "
+                       f"{(y2 - y1) / height:.6f}")
+                if not ball_only or class_index == CLASSES.index("ball"):
+                    rows.append(row)
+                elif score >= AUTO_PEOPLE_CONFIDENCE:
+                    people.append(row)
             cv2.imwrite(str(LOCAL / "images" / f"{name}.jpg"), frame)
             (LOCAL / "labels" / f"{name}.txt").write_text("\n".join(rows) + "\n" if rows else "")
+            if ball_only:
+                (LOCAL / "people" / f"{name}.txt").write_text(
+                    "\n".join(people) + "\n" if people else "")
             saved += 1
         capture.release()
     print(f"{saved} frames with pre-labels in {LOCAL}")
     print("Correct them in a YOLO-format labelling tool (classes.txt gives the "
           "class order), then run: python src/train_detector.py prepare-local")
     return saved
+
+
+def import_labels(export_dir):
+    """Copy corrected labels from a labelling tool's YOLO export back to
+    data/local_det/labels.
+
+    Handles what Roboflow does to an export: renamed files
+    ("match2_000300_jpg.rf.<hash>.txt"), train/valid/test folders, and
+    classes in another order (its data.yaml says which).
+    """
+    import re
+
+    import yaml
+
+    export_dir = Path(export_dir)
+    remap = None
+    exported = next(export_dir.rglob("data.yaml"), None)
+    if exported is not None:
+        names = yaml.safe_load(exported.read_text(encoding="utf-8")).get("names")
+        if isinstance(names, dict):
+            names = [names[k] for k in sorted(names)]
+        unknown = [n for n in names if n not in CLASSES]
+        if unknown:
+            raise SystemExit(f"{exported} has classes {unknown}; expected {CLASSES}")
+        remap = {i: CLASSES.index(n) for i, n in enumerate(names)}
+        print(f"Class order in the export: {names}")
+    else:
+        print("No data.yaml in the export: assuming the order", CLASSES)
+
+    known = {p.stem for p in (LOCAL / "images").glob("*.jpg")}
+    imported, unknown_files = 0, []
+    for label in export_dir.rglob("*.txt"):
+        if label.name == "classes.txt":
+            continue
+        stem = re.sub(r"_(jpg|jpeg|png)(\.rf\.[0-9A-Za-z]+)?$", "", label.stem)
+        stem = re.sub(r"\.rf\.[0-9A-Za-z]+$", "", stem)
+        if stem not in known:
+            unknown_files.append(label.name)
+            continue
+        lines = [line.split() for line in label.read_text().splitlines() if line.strip()]
+        if remap:
+            lines = [[str(remap[int(p[0])])] + p[1:] for p in lines]
+        (LOCAL / "labels" / f"{stem}.txt").write_text("".join(" ".join(p) + "\n" for p in lines))
+        imported += 1
+    print(f"Imported {imported} corrected label files into {LOCAL / 'labels'}")
+    if unknown_files:
+        print(f"{len(unknown_files)} files did not match a frame from label-frames, "
+              f"e.g. {unknown_files[:3]}")
+    return imported
 
 
 def prepare_local(validation_share=0.15, soccernet_share=0.5):
@@ -253,6 +323,7 @@ def prepare_local(validation_share=0.15, soccernet_share=0.5):
         shutil.rmtree(LOCAL_DATASET / "labels" / split, ignore_errors=True)
         (LOCAL_DATASET / "images" / split).mkdir(parents=True, exist_ok=True)
         (LOCAL_DATASET / "labels" / split).mkdir(parents=True, exist_ok=True)
+    remap = None
     counts = {"train": 0, "val": 0}
     balls = {"train": 0, "val": 0}
     for frames in by_video.values():
@@ -261,10 +332,17 @@ def prepare_local(validation_share=0.15, soccernet_share=0.5):
             split = "train" if position < cut else "val"
             label = LOCAL / "labels" / f"{image.stem}.txt"
             _link(image, LOCAL_DATASET / "images" / split / image.name)
-            shutil.copy2(label, LOCAL_DATASET / "labels" / split / label.name)
+            lines = [line.split() for line in label.read_text().splitlines() if line.strip()]
+            if remap:
+                lines = [[str(remap[int(p[0])])] + p[1:] for p in lines]
+            people = LOCAL / "people" / f"{image.stem}.txt"
+            if people.exists() and all(p[0] == "3" for p in lines):
+                # Ball-only labelling: add the model's player boxes.
+                lines += [line.split() for line in people.read_text().splitlines() if line.strip()]
+            (LOCAL_DATASET / "labels" / split / label.name).write_text(
+                "".join(" ".join(p) + "\n" for p in lines))
             counts[split] += 1
-            balls[split] += sum(1 for line in label.read_text().splitlines()
-                                if line.split()[:1] == ["3"])
+            balls[split] += sum(1 for p in lines if p[0] == "3")
 
     train = ["images/train"]
     soccernet = DATASET / "images" / "train"
@@ -347,6 +425,11 @@ def main():
     lf.add_argument("--every", type=float, default=2.0, help="seconds between frames")
     lf.add_argument("--limit", type=int, default=400, help="frames in all")
     lf.add_argument("--model", type=Path, help="default: the newest models/football_*.pt")
+    lf.add_argument("--all-classes", action="store_true",
+                    help="correct players too (default: only the ball)")
+    il = sub.add_parser("import-labels",
+                        help="corrected labels from a YOLO export (e.g. Roboflow)")
+    il.add_argument("export_dir", type=Path, help="the unzipped export folder")
     pl = sub.add_parser("prepare-local", help="dataset from your corrected frames")
     pl.add_argument("--soccernet-share", type=float, default=0.5,
                     help="share of SoccerNet frames mixed into training (0 = none)")
@@ -368,7 +451,10 @@ def main():
     elif args.command == "prepare":
         prepare(args.source, args.stride, args.validation_clips)
     elif args.command == "label-frames":
-        label_frames(args.videos, args.every, args.limit, args.model)
+        label_frames(args.videos, args.every, args.limit, args.model,
+                     ball_only=not args.all_classes)
+    elif args.command == "import-labels":
+        import_labels(args.export_dir)
     elif args.command == "prepare-local":
         prepare_local(soccernet_share=args.soccernet_share)
     else:
