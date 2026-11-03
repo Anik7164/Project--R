@@ -33,6 +33,7 @@ import asyncio
 import json
 import shutil
 import subprocess
+import time
 import wave
 from pathlib import Path
 
@@ -98,7 +99,37 @@ class EdgeVoice:
                     chunks.append(chunk["data"])
             return b"".join(chunks)
 
-        return decode_audio(asyncio.run(synthesise()))
+        # The online service sometimes answers with no audio; try again a
+        # few times before giving up on the line.
+        error = None
+        for attempt in range(3):
+            try:
+                return decode_audio(asyncio.run(synthesise()))
+            except Exception as exc:  # edge_tts.exceptions.NoAudioReceived, network
+                error = exc
+                time.sleep(1.0 + attempt)
+        raise RuntimeError(
+            f"edge voice failed ({type(error).__name__}: {error}). Update it "
+            "with: pip install -U edge-tts, and check the internet connection."
+        ) from error
+
+
+class FallbackVoice:
+    """The edge voice, and the offline MMS voice for any line edge fails on
+    (loaded only when first needed)."""
+
+    def __init__(self, primary):
+        self.primary = primary
+        self.backup = None
+
+    def __call__(self, text):
+        try:
+            return self.primary(text)
+        except RuntimeError as exc:
+            if self.backup is None:
+                print(f"{exc}\nUsing the offline MMS voice for the lines it misses.")
+                self.backup = MmsVoice()
+            return self.backup(text)
 
 
 def ffmpeg_path():
@@ -223,7 +254,8 @@ def main():
     if not commentary.exists():
         raise SystemExit(f"No {commentary}. Run player_identity.py first.")
     lines = json.loads(commentary.read_text(encoding="utf-8"))
-    voice = MmsVoice() if args.voice == "mms" else EdgeVoice(args.speaker)
+    voice = (MmsVoice() if args.voice == "mms"
+             else FallbackVoice(EdgeVoice(args.speaker)))
     speak(args.video, lines, voice)
 
 
