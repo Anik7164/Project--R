@@ -10,3 +10,5 @@ numpy==2.2.6
 # LLM client used by the project
 ollama
 lap==0.5.13
+# Event spotting with the trained SoccerNet model (src/action_spotting.py, CPU is fine)
+tensorflow
