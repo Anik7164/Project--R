@@ -156,6 +156,15 @@ On test1.mp4 the model finds the corner after the 0:54 save, the foul at 1:28 an
 * Model events are checked with them: a spotted foul or free kick needs a whistle nearby, a shot or corner a roar, and anything else (throw-in, goal kick) a confidence of 0.6, otherwise it is dropped. Two spots of the same type within 10 s are one event.
 * Where nothing else is said, a roar becomes `big_chance` ("the crowd is up, orange are attacking"), a whistle `whistle_stop` ("the referee stops play"), and a spell where one team keeps the ball `possession_spell`. These name the team, not a player, so they stay right on weak footage. `--no-audio` turns all this off.
 
+**How right is the commentary?** Write down what really happens, then score the events against it:
+
+```powershell
+python src/mark_events.py --video data/videos/match5.mp4 --teams orange white   # one key per event while watching
+python src/score_commentary.py --video data/videos/match5.mp4
+```
+
+`mark_events.py` plays the video; press g goal, s shot, a attack, f foul, k free kick, c corner, t throw-in, o goal kick, x tackle, y card, w whistle (then 1 or 2 for the team), space to pause, j/l to jump 5 s, u to undo. Or write `outputs/tracking/<name>_truth.txt` by hand, one line per event (`7:49 goal orange`). `score_commentary.py` prints each line as right, wrong or wrong team (an event of a fitting type within a few seconds, e.g. "the referee stops play" fits a whistle, foul or free kick) and the share of right lines; passes, runs and possession lines are not checked.
+
 `ball_tracking.py` keeps the YOLO "sports ball" detection that continues the ball's path (camera motion removed) and fills short gaps. `match_events.py` writes `outputs/tracking/test1_events.json` with each event's minute, type (names from `dataset.json`) and the players involved (scorer/assist, fouler/fouled, booked player, set-piece taker), using ball possession from the tracks:
 
 * **Goals** come from the broadcast score graphic (`src/scoreboard.py`): it finds the part of the top of the frame that stays the same, the two score digits in it, and reports a goal whenever one digit changes and stays changed for 2 seconds. On test1.mp4 it finds both goals (1:02.8 United 1-0, 1:49.6 Tottenham 1-1). The colours of the board's two halves are matched to the team colours to know which team scored; the scorer is the last player of that team on the ball, which is only as good as the ball tracking (weak on highlights). Use `--no-scoreboard` to turn it off.
