@@ -134,7 +134,13 @@ def fill_template(templates, minute, who, rng=random, extra=None, avoid=()):
     if isinstance(avoid, list):
         avoid.append(template)
         del avoid[:-RECENT_TEMPLATES]
-    return template.format(**values)
+    return _bengali_joins(template.format(**values))
+
+
+def _bengali_joins(text):
+    """Templates attach "-এর" to a name ("{player}-এর"); after a common
+    noun Bengali joins it: "খেলোয়াড়ের", "দলের"."""
+    return text.replace("খেলোয়াড়-এর", "খেলোয়াড়ের").replace("দল-এর", "দলের")
 
 
 def team_label(colour):
