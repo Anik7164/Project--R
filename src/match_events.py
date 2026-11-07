@@ -675,6 +675,22 @@ def add_play_events(match, events, start_minute=0):
     return sorted(events + play, key=lambda e: e["frame"])
 
 
+def add_possession_spells(match, events, start_minute=0):
+    """"Orange keep the ball" lines in the quiet spells between events."""
+    import play_events
+
+    spells = play_events.possession_spells(match, find_touches(match),
+                                           [e["frame"] for e in events])
+    added = []
+    for frame, team in spells:
+        event = _event(match, frame, "possession_spell", [], 0.7, "possession",
+                       start_minute)
+        event["team"] = team
+        event["team_colour"] = (match.team_colours or {}).get(team)
+        added.append(event)
+    return sorted(events + added, key=lambda e: e["frame"])
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
     parser.add_argument("--video", type=Path, required=True,
@@ -698,6 +714,9 @@ def main():
     parser.add_argument("--no-play", action="store_true",
                         help="leave out passes, tackles, runs and the "
                              "team introduction (play_events.py)")
+    parser.add_argument("--no-audio", action="store_true",
+                        help="do not use the whistle and the crowd "
+                             "(audio_cues.py)")
     parser.add_argument("--no-scoreboard", action="store_true",
                         help="do not read goals from the score graphic")
     args = parser.parse_args()
@@ -742,8 +761,28 @@ def main():
             ] + goals
             events.sort(key=lambda e: e["frame"])
 
+    cues = []
+    if not args.no_audio:
+        import audio_cues
+        import audio_events
+
+        cues = audio_cues.load_cues(args.video)
+        print(f"Sound: {sum(c['type'] == 'whistle' for c in cues)} whistles, "
+              f"{sum(c['type'] == 'crowd_roar' for c in cues)} crowd roars")
+        before = len(events)
+        events = audio_events.check_with_sound(events, cues)
+        if before != len(events):
+            print(f"Dropped {before - len(events)} model events the sound does not back up")
+
     if not args.no_play:
         events = add_play_events(match, events, args.start_minute)
+    if cues:
+        events = sorted(events + audio_events.events_from_sound(
+            match, events, cues, find_touches(match),
+            lambda f, t, p, c, src: _event(match, f, t, p, c, src, args.start_minute)),
+            key=lambda e: e["frame"])
+    if not args.no_play:
+        events = add_possession_spells(match, events, args.start_minute)
 
     output = TRACKING_DIR / f"{name}_events.json"
     output.write_text(json.dumps(events, indent=2, ensure_ascii=False),
@@ -752,6 +791,8 @@ def main():
         who = ", ".join(f"{p['role']} P{p['track_id']}" for p in event["players"])
         if event["type"] == "match_intro":
             who = f"{event['team_colour']} v {event['opponent_colour']}"
+        elif event.get("team_colour") and not who:
+            who = event["team_colour"]
         score = f" ({event['score']})" if "score" in event else ""
         print(f"{event['minute']:>3}'  {event['type']:<12} {who}{score}")
     print("Events:", output)

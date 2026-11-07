@@ -183,3 +183,41 @@ def match_intro(match):
     team_a, team_b = sorted(colours)[:2]
     return {"team": team_a, "opponent": team_b,
             "team_colour": colours[team_a], "opponent_colour": colours[team_b]}
+
+
+# Team-level lines for quiet spells: who has the ball. They need neither a
+# clear ball in every frame nor a named player, so they stay right on
+# weak footage.
+SPELL_SECONDS = 10.0
+SPELL_SHARE = 0.7          # of the ball time in the spell
+SPELL_MIN_BALL_SECONDS = 3.0
+SPELL_GAP_SECONDS = 15.0   # from any other line, and between spells
+
+
+def possession_spells(match, touches, busy_frames=()):
+    """[(frame, team)]: spells where one team clearly keeps the ball."""
+    fps = match.fps
+    touches = [t for t in reliable(match, touches) if t.team is not None]
+    if not touches:
+        return []
+    size, gap = int(SPELL_SECONDS * fps), SPELL_GAP_SECONDS * fps
+    spoken = sorted(busy_frames)
+    found = []
+    for end in range(touches[0].start + size, touches[-1].end + 1, size // 2):
+        start = end - size
+        time_by_team = {}
+        for touch in touches:
+            overlap = min(touch.end, end) - max(touch.start, start) + 1
+            if overlap > 0:
+                time_by_team[touch.team] = time_by_team.get(touch.team, 0) + overlap
+        total = sum(time_by_team.values())
+        if total < SPELL_MIN_BALL_SECONDS * fps:
+            continue
+        team = max(time_by_team, key=time_by_team.get)
+        if time_by_team[team] < SPELL_SHARE * total:
+            continue
+        if any(abs(end - f) < gap for f in spoken):
+            continue
+        found.append((end, team))
+        spoken.append(end)
+    return found

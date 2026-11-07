@@ -1,0 +1,68 @@
+import numpy as np
+
+import audio_cues as ac
+from audio_events import check_with_sound, merge_repeats
+from match_events import MatchData, Touch
+from play_events import possession_spells
+
+RATE = ac.SAMPLE_RATE
+
+
+def _noise(seconds, level=0.01, seed=0):
+    return np.random.default_rng(seed).normal(0, level, int(seconds * RATE)).astype(np.float32)
+
+
+def _tone(seconds, start_hz, end_hz=None, level=0.2):
+    t = np.arange(int(seconds * RATE)) / RATE
+    end_hz = start_hz if end_hz is None else end_hz
+    phase = 2 * np.pi * (start_hz * t + (end_hz - start_hz) * t ** 2 / (2 * seconds))
+    return (level * np.sin(phase)).astype(np.float32)
+
+
+def test_flat_whistle_found_sliding_voice_not():
+    audio = _noise(12)
+    for at in (1, 4, 7):  # three blows of the same whistle
+        audio[at * RATE:at * RATE + RATE // 2] += _tone(0.5, 4000)
+    audio[10 * RATE:10 * RATE + RATE // 2] += _tone(0.5, 3000, 4200)  # a slide
+    whistles = ac.find_whistles(audio)
+    assert [round(w["time"]) for w in whistles] == [1, 4, 7]
+    assert all(abs(w["pitch"] - 4000) < 50 for w in whistles)
+
+
+def test_crowd_roar_against_the_recent_level():
+    levels = np.full(200, -20.0)
+    levels[100:106] = -15.0  # 3 s, 5 dB louder
+    levels[150] = -10.0      # one loud bang
+    [roar] = ac.find_roars(levels)
+    assert roar["time"] == 50.0 and roar["strength"] == 5.0
+
+
+def _ev(t, kind, conf=0.5, source="spotting"):
+    return {"time": t, "type": kind, "confidence": conf, "source": source, "frame": int(t * 30)}
+
+
+def test_sound_backs_up_or_drops_model_events():
+    cues = [{"time": 100.0, "type": "whistle"}, {"time": 200.0, "type": "crowd_roar"}]
+    events = [_ev(99, "foul"), _ev(300, "foul"), _ev(201, "missed_shot"),
+              _ev(50, "throw_in"), _ev(60, "throw_in", 0.8), _ev(400, "goal", 1.0, "scoreboard")]
+    kept = [(e["time"], e["type"]) for e in check_with_sound(events, cues)]
+    assert kept == [(60, "throw_in"), (99, "foul"), (201, "missed_shot"), (400, "goal")]
+
+
+def test_repeated_spots_merge():
+    merged = merge_repeats([_ev(302, "freekick", 0.62), _ev(308, "freekick", 0.70)])
+    assert len(merged) == 1 and merged[0]["confidence"] == 0.70
+
+
+def test_possession_spell_when_one_team_keeps_the_ball():
+    fps = 30.0
+    frames = range(0, 600)
+    tracks = {f: [(1, (90, 240, 110, 300)), (2, (190, 240, 210, 300))] for f in frames}
+    match = MatchData(fps=fps, tracks=tracks,
+                      teams={1: {"team": "team_a"}, 2: {"team": "team_a"}},
+                      ball={f: (100, 300, 100, 300, 1) for f in frames},
+                      team_colours={"team_a": "orange"}, ball_detected=set(frames))
+    touches = [Touch(0, 149, 1, "team_a"), Touch(160, 349, 2, "team_a")]
+    [(frame, team)] = possession_spells(match, touches)
+    assert team == "team_a"
+    assert possession_spells(match, touches, busy_frames=[frame]) == []
