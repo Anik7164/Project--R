@@ -17,7 +17,8 @@ wide, but the sound is clear and costs almost nothing to analyse:
 Both work one step at a time from the past only, so they also run live.
 
 Output: outputs/tracking/<name>_audio.json
-    [{"time", "type": "whistle"|"crowd_roar", "strength", "duration"}]
+    {"version", "cues": [{"time", "type": "whistle"|"crowd_roar", "strength",
+                          "duration", ...}]}
 strength: whistle tone prominence in dB, or the roar's rise in dB.
 
 Usage:
@@ -204,14 +205,26 @@ def audio_cues(video):
     return sorted(cues, key=lambda c: c["time"])
 
 
+# Bump when the cues change, so an old <name>_audio.json is made again.
+CUES_VERSION = 2
+
+
+def save_cues(path, cues):
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps({"version": CUES_VERSION, "cues": cues}, indent=2),
+                    encoding="utf-8")
+
+
 def load_cues(video):
-    """Cached <name>_audio.json, made if missing."""
+    """Cached <name>_audio.json, made again if missing or from an older
+    version of this script."""
     path = TRACKING_DIR / f"{Path(video).stem}_audio.json"
     if path.exists():
-        return json.loads(path.read_text(encoding="utf-8"))
+        cached = json.loads(path.read_text(encoding="utf-8"))
+        if isinstance(cached, dict) and cached.get("version") == CUES_VERSION:
+            return cached["cues"]
     cues = audio_cues(video)
-    TRACKING_DIR.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(cues, indent=2), encoding="utf-8")
+    save_cues(path, cues)
     return cues
 
 
@@ -222,7 +235,7 @@ def main():
     cues = audio_cues(args.video)
     TRACKING_DIR.mkdir(parents=True, exist_ok=True)
     output = TRACKING_DIR / f"{args.video.stem}_audio.json"
-    output.write_text(json.dumps(cues, indent=2), encoding="utf-8")
+    save_cues(output, cues)
     for cue in cues:
         t = cue["time"]
         print(f"{int(t // 60)}:{t % 60:04.1f}  {cue['type']:<10}  "
