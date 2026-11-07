@@ -66,3 +66,30 @@ def test_possession_spell_when_one_team_keeps_the_ball():
     [(frame, team)] = possession_spells(match, touches)
     assert team == "team_a"
     assert possession_spells(match, touches, busy_frames=[frame]) == []
+
+
+def test_goal_from_long_roar_and_a_huddle():
+    from audio_events import goals_from_sound
+
+    fps = 10.0
+    tracks = {}
+    for f in range(0, 600):
+        # team_a: 5 players close together after 30 s; team_b spread out
+        a = [(i, (100 + i * (15 if f > 300 else 120), 200, 110 + i * (15 if f > 300 else 120), 260))
+             for i in range(5)]
+        b = [(10 + i, (100 + i * 150, 400, 110 + i * 150, 460)) for i in range(5)]
+        tracks[f] = a + b
+    match = MatchData(fps=fps, tracks=tracks,
+                      teams={**{i: {"team": "team_a", "role": "player"} for i in range(5)},
+                             **{10 + i: {"team": "team_b", "role": "player"} for i in range(5)}},
+                      ball={}, team_colours={"team_a": "orange", "team_b": "white"})
+    make = lambda f, t, p, c, s: {"frame": f, "type": t, "players": p, "confidence": c,
+                                  "source": s, "time": f / fps}
+    roar = {"type": "crowd_roar", "time": 25.0, "duration": 4.0, "strength": 5.0,
+            "longest": 3.0, "longest_at": 26.0}
+    [goal] = goals_from_sound(match, [roar], make)
+    assert goal["team"] == "team_a" and goal["time"] == 26.0
+    early = dict(roar, time=5.0, longest_at=5.0)   # no huddle after it
+    assert goals_from_sound(match, [early], make) == []
+    short = dict(roar, longest=1.5)                # too short for a goal
+    assert goals_from_sound(match, [short], make) == []

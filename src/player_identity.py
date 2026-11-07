@@ -55,7 +55,7 @@ MAIN_ROLE = {
     "run_with_ball": "runner",
 }
 # Moments about a team, not a player: their lines never name a player.
-TEAM_EVENTS = {"big_chance", "whistle_stop", "possession_spell"}
+TEAM_EVENTS = {"big_chance", "whistle_stop", "possession_spell", "goal_celebration"}
 # Events about two players: {from_player} and {to_player}.
 SECOND_ROLE = {
     "pass": "receiver",
@@ -209,7 +209,8 @@ def commentary(events, identities, teams, templates_by_type, rng=random):
     lines = []
     recent = []
     for event in events:
-        templates = templates_by_type.get(event["type"], [])
+        kind = event.get("template_type", event["type"])
+        templates = templates_by_type.get(kind, [])
         if event["type"] == "match_intro":
             extra = {"team": team_label(event.get("team_colour")),
                      "opponent": team_label(event.get("opponent_colour"))}
@@ -256,7 +257,7 @@ def commentary(events, identities, teams, templates_by_type, rng=random):
             extra["team"] = team_label(team_info.get("team_colour"))
         if event.get("team_colour"):  # team-level moments (sound, possession)
             extra["team"] = team_label(event["team_colour"])
-        if event["type"] in TEAM_EVENTS:
+        if kind in TEAM_EVENTS:
             who = None
         line = fill_template(templates, event["minute"], who, rng, extra, recent)
         if line and situation:

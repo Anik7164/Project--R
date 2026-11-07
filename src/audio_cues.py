@@ -187,9 +187,12 @@ def find_roars(levels):
             last = merged[-1]
             last["duration"] = round(start + duration - last["time"], 2)
             last["strength"] = round(float(max(last["strength"], rise)), 1)
+            if duration > last.get("longest", 0):
+                last["longest"], last["longest_at"] = duration, round(start, 2)
             continue
         merged.append({"time": round(start, 2), "type": "crowd_roar",
-                       "strength": round(float(rise), 1), "duration": duration})
+                       "strength": round(float(rise), 1), "duration": duration,
+                       "longest": duration, "longest_at": round(start, 2)})
     return merged
 
 

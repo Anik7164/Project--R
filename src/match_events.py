@@ -774,6 +774,18 @@ def main():
         if before != len(events):
             print(f"Dropped {before - len(events)} model events the sound does not back up")
 
+    if cues and not any(e["type"] == "goal" for e in events):
+        # No scoreboard goals: a long roar and a celebration huddle.
+        goals = audio_events.goals_from_sound(
+            match, cues,
+            lambda f, t, p, c, src: _event(match, f, t, p, c, src, args.start_minute))
+        if goals:
+            print(f"Goals from the crowd and the celebration: {len(goals)}")
+            quiet = AFTER_GOAL_SECONDS * args.fps
+            events = sorted([e for e in events if not any(
+                0 <= e["frame"] - g["frame"] <= quiet for g in goals)] + goals,
+                key=lambda e: e["frame"])
+
     if not args.no_play:
         events = add_play_events(match, events, args.start_minute)
     if cues:

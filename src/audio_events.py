@@ -15,7 +15,17 @@ On a local match the picture is weak but the sound is not:
 
 Speaking less but rightly is the point: on footage like this a wrong
 "free kick!" is worse than a plain "the referee stops play".
+
+Goals without a scoreboard (goals_from_sound): the crowd roars long and
+loud, and then the scoring team's players gather to celebrate. A roar of
+GOAL_ROAR_DB for GOAL_ROAR_SECONDS followed by a huddle of one team
+(HUDDLE_PLAYERS or more within HUDDLE_HEIGHTS player heights of each
+other, on average over HUDDLE_SECONDS) is a goal by the huddling team.
+Tuned on one goal (match1 7:49: huddle 5-7 orange players for 15 s; the
+other roars had 2-3), so check it on more matches.
 """
+
+import numpy as np
 
 # Event model claims that need the sound to back them up.
 NEEDS_WHISTLE = {"foul": (-3.0, 6.0), "offside": (-3.0, 6.0),
@@ -129,3 +139,56 @@ def events_from_sound(match, events, cues, touches, make_event):
         found.append(event)
         taken.append(at)
     return found
+
+
+GOAL_ROAR_DB = 4.5
+GOAL_ROAR_SECONDS = 2.5
+HUDDLE_SECONDS = 20.0
+HUDDLE_HEIGHTS = 2.0
+HUDDLE_PLAYERS = 4.5        # mean size of the biggest same-team group
+HUDDLE_STEP_SECONDS = 0.5
+
+
+def biggest_group(match, frame):
+    """(size, team) of the largest group of teammates close together."""
+    people = []
+    for track_id, box in match.players(frame):
+        team = match.team(track_id)
+        if team is not None and match.role(track_id) == "player":
+            people.append((team, (box[0] + box[2]) / 2, box[3], box[3] - box[1]))
+    best = (0, None)
+    for team, x, y, h in people:
+        size = sum(1 for t, x2, y2, _ in people
+                   if t == team and np.hypot(x2 - x, y2 - y) <= HUDDLE_HEIGHTS * h)
+        if size > best[0]:
+            best = (size, team)
+    return best
+
+
+def goals_from_sound(match, cues, make_event):
+    """Goals from a long roar plus a celebration huddle (see top)."""
+    goals = []
+    for cue in cues:
+        if (cue["type"] != "crowd_roar" or cue["strength"] < GOAL_ROAR_DB
+                or cue.get("longest", cue["duration"]) < GOAL_ROAR_SECONDS):
+            continue
+        first = int((cue["time"] + cue["duration"]) * match.fps)
+        step = max(1, int(HUDDLE_STEP_SECONDS * match.fps))
+        groups = [biggest_group(match, f)
+                  for f in range(first, first + int(HUDDLE_SECONDS * match.fps), step)]
+        groups = [g for g in groups if g[1] is not None]
+        if not groups or np.mean([size for size, _ in groups]) < HUDDLE_PLAYERS:
+            continue
+        teams = [team for size, team in groups if size >= HUDDLE_PLAYERS]
+        if not teams:
+            continue
+        team = max(set(teams), key=teams.count)
+        # The goal is the loudest, longest part of the roar, not its start
+        # (the crowd rises with the attack).
+        at = cue.get("longest_at", cue["time"])
+        event = make_event(int(at * match.fps), "goal", [], 0.6, "crowd+huddle")
+        event["template_type"] = "goal_celebration"  # scorer unknown: team lines
+        event["team"] = team
+        event["team_colour"] = (match.team_colours or {}).get(team)
+        goals.append(event)
+    return goals
