@@ -21,6 +21,10 @@ SIDE_MARGIN = 0.20
 # so white, black and grey kits still get a useful descriptor.
 MIN_SATURATION = 50
 HUE_BINS = 16
+# Hue bins start at this hue, so that one bin boundary falls between red
+# (hue 0-3, 175-180) and orange: phone footage puts orange kits at hue 5-11
+# (match1: median 6), which a bin starting at 0 lumped with red.
+HUE_OFFSET = 4
 SAT_BINS = 4
 VALUE_BINS = 8
 
@@ -96,8 +100,9 @@ def _region_histogram(region):
     coloured = hsv[hsv[:, 1] >= MIN_SATURATION]
     plain = hsv[hsv[:, 1] < MIN_SATURATION]
 
+    hue = (coloured[:, 0].astype(np.float32) - HUE_OFFSET) % 180
     hue_sat, _, _ = np.histogram2d(
-        coloured[:, 0], coloured[:, 1],
+        hue, coloured[:, 1],
         bins=(HUE_BINS, SAT_BINS),
         range=((0, 180), (MIN_SATURATION, 256)),
     )
@@ -150,9 +155,13 @@ def blend(old, new, momentum=0.9):
 # Colour names for commentary, keyed by OpenCV hue (0-180) upper bound.
 HUE_NAMES = [
     (8, "red"), (20, "orange"), (33, "yellow"), (85, "green"),
-    (100, "sky blue"), (130, "blue"), (150, "purple"), (165, "pink"),
+    (98, "sky blue"), (130, "blue"), (150, "purple"), (165, "pink"),
     (181, "red"),
 ]
+
+# Pale kits (white, very light sky blue) in shade come out around value
+# 160-170; real grey kits are darker.
+WHITE_VALUE = 150
 
 BENGALI_COLOUR_NAMES = {
     "red": "লাল",
@@ -180,7 +189,7 @@ def shirt_colour_name(descriptor):
 
     if hue_sat.sum() >= value.sum():
         hue_bin = int(np.argmax(hue_sat.sum(axis=1)))
-        hue = (hue_bin + 0.5) * 180.0 / HUE_BINS
+        hue = ((hue_bin + 0.5) * 180.0 / HUE_BINS + HUE_OFFSET) % 180
         for upper, name in HUE_NAMES:
             if hue < upper:
                 return name
@@ -191,6 +200,6 @@ def shirt_colour_name(descriptor):
     )
     if mean_value < 70:
         return "black"
-    if mean_value < 170:
+    if mean_value < WHITE_VALUE:
         return "grey"
     return "white"

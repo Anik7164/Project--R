@@ -192,6 +192,7 @@ SPELL_SECONDS = 10.0
 SPELL_SHARE = 0.7          # of the ball time in the spell
 SPELL_MIN_BALL_SECONDS = 3.0
 SPELL_GAP_SECONDS = 15.0   # from any other line, and between spells
+SPELL_SAME_TEAM_SECONDS = 60.0  # "orange keep the ball" not again within a minute
 
 
 def possession_spells(match, touches, busy_frames=()):
@@ -217,6 +218,8 @@ def possession_spells(match, touches, busy_frames=()):
         if time_by_team[team] < SPELL_SHARE * total:
             continue
         if any(abs(end - f) < gap for f in spoken):
+            continue
+        if any(t == team and end - f < SPELL_SAME_TEAM_SECONDS * fps for f, t in found):
             continue
         found.append((end, team))
         spoken.append(end)

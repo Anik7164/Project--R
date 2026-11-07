@@ -28,7 +28,8 @@ SURE_CONFIDENCE = 0.6
 NEAR_EVENT_SECONDS = 8.0
 MIN_ROAR_DB = 3.5
 WHISTLE_GAP_SECONDS = 15.0
-POSSESSION_LOOKBACK = 4.0   # whose attack: who had the ball just before the roar
+POSSESSION_LOOKBACK = 4.0
+ATTACK_SHARE = 0.75   # whose attack: who had the ball just before the roar
 
 
 def _cues(cues, kind):
@@ -93,7 +94,12 @@ def attacking_team(match, touches, frame):
         time_by_team[touch.team] = time_by_team.get(touch.team, 0) + overlap
     if not time_by_team:
         return None
-    return max(time_by_team, key=time_by_team.get)
+    team = max(time_by_team, key=time_by_team.get)
+    # Name a team only if it clearly had the ball; a wrong team is worse
+    # than none ("the crowd is up!" alone is still right).
+    if time_by_team[team] < ATTACK_SHARE * sum(time_by_team.values()):
+        return None
+    return team
 
 
 def events_from_sound(match, events, cues, touches, make_event):
