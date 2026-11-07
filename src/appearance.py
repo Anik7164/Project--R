@@ -154,7 +154,7 @@ def blend(old, new, momentum=0.9):
 
 # Colour names for commentary, keyed by OpenCV hue (0-180) upper bound.
 HUE_NAMES = [
-    (8, "red"), (20, "orange"), (33, "yellow"), (85, "green"),
+    (5, "red"), (20, "orange"), (33, "yellow"), (85, "green"),
     (98, "sky blue"), (130, "blue"), (150, "purple"), (165, "pink"),
     (181, "red"),
 ]
@@ -188,8 +188,15 @@ def shirt_colour_name(descriptor):
     value = shirt[coloured_size:]
 
     if hue_sat.sum() >= value.sum():
-        hue_bin = int(np.argmax(hue_sat.sum(axis=1)))
-        hue = ((hue_bin + 0.5) * 180.0 / HUE_BINS + HUE_OFFSET) % 180
+        per_bin = hue_sat.sum(axis=1)
+        hue_bin = int(np.argmax(per_bin))
+        # Weighted circular mean of the peak bin and its neighbours: finer
+        # than one bin (11 hue steps), which matters between red and orange.
+        bins = [(hue_bin + d) % HUE_BINS for d in (-1, 0, 1)]
+        angles = np.array([(b + 0.5) * 2 * np.pi / HUE_BINS for b in bins])
+        weights = per_bin[bins]
+        angle = np.arctan2(weights @ np.sin(angles), weights @ np.cos(angles))
+        hue = ((angle % (2 * np.pi)) * 180.0 / (2 * np.pi) + HUE_OFFSET) % 180
         for upper, name in HUE_NAMES:
             if hue < upper:
                 return name
