@@ -191,3 +191,25 @@ if __name__ == "__main__":
     for pid, c in sorted(by_id.items()):
         if len(c) > 1:
             print("impure", pid, c.most_common())
+
+
+def test_yellow_dry_pitch_still_counts_as_pitch():
+    import numpy as np
+    from appearance import on_pitch, pitch_hues
+    frame = np.zeros((200, 200, 3), np.uint8)
+    frame[:] = (40, 150, 170)          # BGR: dry yellow-brown grass, hue ~22
+    frame[:60] = (200, 200, 200)       # crowd / sky
+    box = (90, 100, 110, 160)
+    assert not on_pitch(frame, box)
+    assert on_pitch(frame, box, pitch_hues(frame))
+
+
+def test_team_names_ignore_what_both_teams_share():
+    import numpy as np
+    from appearance import HUE_BINS, SAT_BINS, VALUE_BINS, team_colour_names
+    size = HUE_BINS * SAT_BINS + VALUE_BINS
+    shared = np.zeros(2 * size); shared[1 * SAT_BINS + 2] = 0.6    # orange cast
+    dark, light = shared.copy(), shared.copy()
+    dark[HUE_BINS * SAT_BINS] = 0.4                                 # black pixels
+    light[HUE_BINS * SAT_BINS + VALUE_BINS - 1] = 0.4               # white pixels
+    assert team_colour_names(dark, light) == ("black", "white")

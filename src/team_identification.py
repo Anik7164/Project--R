@@ -21,7 +21,7 @@ from collections import Counter, defaultdict
 import cv2
 import numpy as np
 
-from appearance import descriptor_distance, shirt_colour_name
+from appearance import descriptor_distance, shirt_colour_name, team_colour_names
 
 TEAM_LABELS = ("team_a", "team_b")
 
@@ -89,13 +89,14 @@ class TeamClassifier:
         self.centres = centres
         self.spread = spread
         nearest_team = distances.argmin(axis=1)
+        means = []
         for team_index, label in enumerate(TEAM_LABELS):
             members = [
                 d for d, t, k in zip(descriptors, nearest_team, keep)
                 if t == team_index and k
             ]
-            mean = np.mean(members, axis=0) if members else None
-            self.colours[label] = shirt_colour_name(mean)
+            means.append(np.mean(members, axis=0) if members else None)
+        self.colours = dict(zip(TEAM_LABELS, team_colour_names(*means)))
         return self
 
     def predict(self, descriptor):

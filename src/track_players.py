@@ -22,6 +22,7 @@ Usage:
 
 import project_cache  # noqa: F401  keeps downloads/caches in <project>/.cache
 import argparse
+import sys
 import csv
 from collections import defaultdict, deque
 from pathlib import Path
@@ -31,7 +32,7 @@ import numpy as np
 import torch
 from ultralytics import YOLO
 
-from detector_classes import default_model, people_classes
+from detector_classes import check_people_model, default_model, people_classes
 from identity import StablePlayerTracker
 from reid import load_default as load_reid
 
@@ -190,7 +191,9 @@ def parse_args():
         "--no-reid", action="store_true",
         help="match players on colour only (no deep appearance model)",
     )
-    return parser.parse_args()
+    args = parser.parse_args()
+    args.model_given = "--model" in sys.argv
+    return args
 
 
 def main():
@@ -214,6 +217,11 @@ def main():
     print("Tracker:", args.tracker)
 
     model = YOLO(str(args.model))
+    if not args.model_given:
+        model, note = check_people_model(model, args.video, ROOT / "yolo26n.pt",
+                                         IMAGE_SIZE, device)
+        if note:
+            print(note)
     person_classes = people_classes(model)
     print("Detector:", args.model, "| people classes:",
           [model.names[c] for c in person_classes])

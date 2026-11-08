@@ -33,6 +33,7 @@ GRASS_HUE = (32, 90)
 GRASS_MIN_SATURATION = 40
 
 SHIRT_WEIGHT = 0.7
+DARK_VALUE = 80
 
 DESCRIPTOR_SIZE = 2 * (HUE_BINS * SAT_BINS + VALUE_BINS)
 
@@ -51,8 +52,39 @@ def grass_mask(hsv):
 MIN_GRASS_AT_FEET = 0.25
 
 
-def on_pitch(frame, box):
-    """True if the person in box is standing on grass."""
+# The pitch is not always green: sun-dried grass and colour-graded phone
+# video put it at hue 20-30 (match5), bare earth patches lower still. So
+# the colour of the ground is also learnt from each frame: the hues of the
+# bottom part of the picture (where the pitch is when the camera looks at
+# play), as the narrowest hue window holding PITCH_SHARE of its coloured
+# pixels, at most PITCH_MAX_WIDTH wide.
+PITCH_ROWS = 0.4
+PITCH_SHARE = 0.8
+PITCH_MAX_WIDTH = 24
+
+
+def pitch_hues(frame):
+    """(low, high) hue of this frame's ground, or None if it has too few
+    coloured pixels to tell (night, grey artificial turf)."""
+    height = frame.shape[0]
+    ground = cv2.cvtColor(frame[int(height * (1 - PITCH_ROWS)):, ::4], cv2.COLOR_BGR2HSV)
+    hue = ground[..., 0][(ground[..., 1] >= GRASS_MIN_SATURATION) & (ground[..., 2] >= 40)]
+    if hue.size < 500:
+        return None
+    counts = np.bincount(hue.ravel(), minlength=180).astype(float)
+    need = PITCH_SHARE * counts.sum()
+    cumulative = np.concatenate([[0.0], np.cumsum(counts)])
+    for width in range(1, PITCH_MAX_WIDTH + 1):
+        sums = cumulative[width:] - cumulative[:-width]
+        start = int(np.argmax(sums))
+        if sums[start] >= need:
+            return start, start + width - 1
+    return None
+
+
+def on_pitch(frame, box, ground=None):
+    """True if the person in box is standing on the pitch: on green grass,
+    or on the ground colour of this frame (ground = pitch_hues(frame))."""
     x1, y1, x2, y2 = [float(v) for v in box]
     width, height = x2 - x1, y2 - y1
     frame_h, frame_w = frame.shape[:2]
@@ -64,7 +96,12 @@ def on_pitch(frame, box):
         return False
     region = frame[top:bottom, left:right]
     hsv = cv2.cvtColor(region, cv2.COLOR_BGR2HSV)
-    return float(np.mean(grass_mask(hsv))) >= MIN_GRASS_AT_FEET
+    pitch = grass_mask(hsv)
+    if ground is not None:
+        hue = hsv[..., 0]
+        pitch |= ((hue >= ground[0]) & (hue <= ground[1])
+                  & (hsv[..., 1] >= GRASS_MIN_SATURATION))
+    return float(np.mean(pitch)) >= MIN_GRASS_AT_FEET
 
 
 def _band(frame, box, band):
@@ -97,8 +134,11 @@ def _region_histogram(region):
     if len(hsv) == 0:
         return np.zeros(size, dtype=np.float32)
 
-    coloured = hsv[hsv[:, 1] >= MIN_SATURATION]
-    plain = hsv[hsv[:, 1] < MIN_SATURATION]
+    # Very dark pixels have no reliable hue (phone video gives black kits
+    # a strong colour cast), so they count as plain dark.
+    is_coloured = (hsv[:, 1] >= MIN_SATURATION) & (hsv[:, 2] >= DARK_VALUE)
+    coloured = hsv[is_coloured]
+    plain = hsv[~is_coloured]
 
     hue = (coloured[:, 0].astype(np.float32) - HUE_OFFSET) % 180
     hue_sat, _, _ = np.histogram2d(
@@ -176,6 +216,23 @@ BENGALI_COLOUR_NAMES = {
     "grey": "ধূসর",
     "black": "কালো",
 }
+
+
+def team_colour_names(first, second):
+    """Names of two teams' kits from their mean descriptors. What both
+    teams' crops share (skin, the pitch showing between arm and body, the
+    colour cast of the video) is taken out first, so each team is named by
+    what sets it apart: on warm phone video both teams otherwise come out
+    "orange"."""
+    if first is None or second is None:
+        return shirt_colour_name(first), shirt_colour_name(second)
+    common = np.minimum(first, second)
+    names = []
+    for own in (first, second):
+        rest = own - common
+        names.append(shirt_colour_name(rest / rest.sum()) if rest.sum() > 0.05
+                     else shirt_colour_name(own))
+    return tuple(names)
 
 
 def shirt_colour_name(descriptor):

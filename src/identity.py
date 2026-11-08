@@ -40,7 +40,7 @@ from dataclasses import dataclass, field
 import numpy as np
 from scipy.optimize import linear_sum_assignment
 
-from appearance import blend, descriptor_distance, extract_descriptor, on_pitch
+from appearance import blend, descriptor_distance, extract_descriptor, on_pitch, pitch_hues
 from camera_motion import CameraMotionEstimator, warp_box
 from team_identification import TEAM_LABELS, TeamClassifier
 
@@ -853,7 +853,8 @@ class StablePlayerTracker:
         # People not standing on grass are spectators, staff or faces in
         # close-ups, not players.
         if cfg.require_on_pitch:
-            keep = [i for i in keep if on_pitch(frame, boxes[i])]
+            ground = pitch_hues(frame)
+            keep = [i for i in keep if on_pitch(frame, boxes[i], ground)]
         # A box that overlaps another one (any detection, also a dropped
         # duplicate) mixes two players' colours; leave it out of the
         # appearance model.

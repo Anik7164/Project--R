@@ -44,3 +44,44 @@ def default_model():
     trained = sorted((root / "models").glob("football_*.pt"),
                      key=lambda p: p.stat().st_mtime)
     return trained[-1] if trained else root / "yolo26n.pt"
+
+
+# Our football model learnt players from TV broadcasts, where they are
+# small. On phone video filmed close from the touchline (match5: players
+# 150-350 px tall) it can find nobody at all, while the COCO model does.
+PROBE_FRAMES = 20
+MIN_SHARE_OF_COCO = 0.4
+
+
+def check_people_model(model, video, coco_path, image_size=960, device="cpu"):
+    """Return (model to use for people, message). Compares the people the
+    given model finds on PROBE_FRAMES frames of the video with the COCO
+    model's, and falls back to COCO if it finds far fewer."""
+    import cv2
+    from pathlib import Path
+    from ultralytics import YOLO
+
+    if not is_football_model(model) or not Path(coco_path).exists():
+        return model, None
+    coco = YOLO(str(coco_path))
+    capture = cv2.VideoCapture(str(video))
+    total = int(capture.get(cv2.CAP_PROP_FRAME_COUNT))
+    ours = theirs = 0
+    for k in range(PROBE_FRAMES):
+        capture.set(cv2.CAP_PROP_POS_FRAMES, int((k + 0.5) * total / PROBE_FRAMES))
+        ok, frame = capture.read()
+        if not ok:
+            continue
+        for m, counter in ((model, "ours"), (coco, "theirs")):
+            found = len(m.predict(frame, imgsz=image_size, conf=0.35, device=device,
+                                  classes=people_classes(m), verbose=False)[0].boxes)
+            if counter == "ours":
+                ours += found
+            else:
+                theirs += found
+    capture.release()
+    if theirs >= PROBE_FRAMES and ours < MIN_SHARE_OF_COCO * theirs:
+        return coco, (f"The football model found {ours} people on {PROBE_FRAMES} test "
+                      f"frames, the COCO model {theirs}: using {Path(coco_path).name} "
+                      "for the players of this video (give --model to choose yourself).")
+    return model, None
