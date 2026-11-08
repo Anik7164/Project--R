@@ -65,7 +65,14 @@ def main():
     fps = capture.get(cv2.CAP_PROP_FPS) or 25.0
     total = int(capture.get(cv2.CAP_PROP_FRAME_COUNT))
     window = "Mark events (see keys in the title bar of the console)"
-    cv2.namedWindow(window, cv2.WINDOW_AUTOSIZE)
+    try:
+        cv2.namedWindow(window, cv2.WINDOW_AUTOSIZE)
+    except cv2.error as error:
+        raise SystemExit(
+            "This OpenCV cannot open windows (a 'headless' copy, often pulled in by "
+            "easyocr). Fix:\n  pip uninstall -y opencv-python-headless\n"
+            "  pip install --force-reinstall --no-deps opencv-python==5.0.0.93\n"
+            "Or write the list by hand in outputs/tracking/<name>_truth.txt.") from error
     print(__doc__.split("Keys")[1].split("The video")[0])
 
     speed, paused, frame_number = 1.0, False, 0

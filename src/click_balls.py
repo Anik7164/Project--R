@@ -113,9 +113,10 @@ class Window:
         try:
             cv2.namedWindow(name, cv2.WINDOW_AUTOSIZE)
         except cv2.error as error:
-            raise SystemExit("OpenCV cannot open a window here (a 'headless' OpenCV is "
-                             "installed?). Run: pip install --force-reinstall "
-                             "opencv-python==5.0.0.93") from error
+            raise SystemExit("OpenCV cannot open a window here (a 'headless' copy, often "
+                             "pulled in by easyocr). Fix:\n  pip uninstall -y "
+                             "opencv-python-headless\n  pip install --force-reinstall "
+                             "--no-deps opencv-python==5.0.0.93") from error
         cv2.setMouseCallback(name, self._on_mouse)
 
     def _on_mouse(self, event, x, y, flags, param):
