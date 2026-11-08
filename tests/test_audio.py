@@ -44,9 +44,11 @@ def _ev(t, kind, conf=0.5, source="spotting"):
 def test_sound_backs_up_or_drops_model_events():
     cues = [{"time": 100.0, "type": "whistle"}, {"time": 200.0, "type": "crowd_roar"}]
     events = [_ev(99, "foul"), _ev(300, "foul"), _ev(201, "missed_shot"),
-              _ev(50, "throw_in"), _ev(60, "throw_in", 0.8), _ev(400, "goal", 1.0, "scoreboard")]
+              _ev(50, "throw_in"), _ev(60, "throw_in", 0.8), _ev(400, "goal", 1.0, "scoreboard"),
+              _ev(102, "yellow_card"), _ev(500, "red_card", 0.9)]
     kept = [(e["time"], e["type"]) for e in check_with_sound(events, cues)]
-    assert kept == [(60, "throw_in"), (99, "foul"), (201, "missed_shot"), (400, "goal")]
+    assert kept == [(60, "throw_in"), (99, "foul"), (201, "missed_shot"), (400, "goal"),
+                    (500, "red_card")]
 
 
 def test_repeated_spots_merge():

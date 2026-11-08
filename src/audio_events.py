@@ -7,7 +7,10 @@ On a local match the picture is weak but the sound is not:
   * a spotted foul, free kick or offside is believed only if the
     referee's whistle was heard around it; a spotted shot or corner only
     if the crowd reacted, unless the model is very sure (SURE_CONFIDENCE).
-    Throw-ins and goal kicks make no sound, so they need that certainty;
+    Throw-ins and goal kicks make no sound, so they need that certainty,
+    and so do cards: the event model learnt them from TV close-ups of the
+    referee, which a camera in the stands never has (match5: 14 of 14
+    unsure cards were wrong);
   * a crowd roar with no other event near it becomes "big_chance": the
     crowd saw something dangerous (the lines say "what a moment" and name
     the attacking team, not "shot" or "goal", so they stay true);
@@ -31,7 +34,7 @@ import numpy as np
 NEEDS_WHISTLE = {"foul": (-3.0, 6.0), "offside": (-3.0, 6.0),
                  "freekick": (-40.0, 3.0)}     # (seconds before, after) the event
 NEEDS_ROAR = {"missed_shot": (-6.0, 6.0), "corner_kick": (-20.0, 6.0)}
-SILENT = {"throw_in", "goal_kick"}
+SILENT = {"throw_in", "goal_kick", "yellow_card", "red_card"}
 SURE_CONFIDENCE = 0.6
 
 # A cue this close to another event belongs to it.
