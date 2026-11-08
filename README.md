@@ -162,6 +162,7 @@ On test1.mp4 the model finds the corner after the 0:54 save, the foul at 1:28 an
 ```powershell
 python src/mark_events.py --video data/videos/match5.mp4 --teams orange white   # one key per event while watching
 python src/score_commentary.py --video data/videos/match5.mp4
+python src/review_events.py --video data/videos/match5.mp4 [--only wrong]   # watch every line with its verdict
 ```
 
 `mark_events.py` plays the video; press g goal, s shot, a attack, f foul, k free kick, c corner, t throw-in, o goal kick, x tackle, y card, w whistle (then 1 or 2 for the team), space to pause, j/l to jump 5 s, u to undo. Or write `outputs/tracking/<name>_truth.txt` by hand, one line per event (`7:49 goal orange`). `score_commentary.py` prints each line as right, wrong or wrong team (an event of a fitting type within a few seconds, e.g. "the referee stops play" fits a whistle, foul or free kick) and the share of right lines; passes, runs and possession lines are not checked.
