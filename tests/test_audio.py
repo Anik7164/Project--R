@@ -95,3 +95,11 @@ def test_goal_from_long_roar_and_a_huddle():
     assert goals_from_sound(match, [early], make) == []
     short = dict(roar, longest=1.5)                # too short for a goal
     assert goals_from_sound(match, [short], make) == []
+
+
+def test_silent_before_kickoff_and_in_pauses():
+    from match_events import _clock, _clock_range, _silent
+    assert _clock("1:22") == 82 and _clock("90") == 90
+    pause = [_clock_range("7:13-7:25")]
+    assert _silent(50, 82) and not _silent(90, 82)
+    assert _silent(440, 82, pause) and not _silent(450, 82, pause)

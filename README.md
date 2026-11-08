@@ -141,7 +141,8 @@ Writes `outputs/tracking/test1_teams.csv`: for every stable player ID its `team`
 pip install tensorflow                                        # once, for action_spotting.py
 python src/ball_tracking.py   --video data/videos/test1.mp4
 python src/action_spotting.py --video data/videos/test1.mp4  # trained SoccerNet event model
-python src/match_events.py    --video data/videos/test1.mp4 [--start-minute 0] [--start-score 0-0]
+python src/match_events.py    --video data/videos/test1.mp4 [--start-minute 0] [--start-score 0-0] [--kickoff 1:22] [--pause 7:13-7:25]
+# --kickoff / --pause: say nothing during the walkout, half-time or an injury break
 python src/scoreboard.py      --video data/videos/test1.mp4  # optional: just list the goals
 ```
 

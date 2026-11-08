@@ -691,6 +691,22 @@ def add_possession_spells(match, events, start_minute=0):
     return sorted(events + added, key=lambda e: e["frame"])
 
 
+def _clock(text):
+    """'1:22' or '82' -> seconds."""
+    minutes, _, seconds = text.partition(":")
+    return float(minutes) * 60 + float(seconds) if seconds else float(minutes)
+
+
+def _clock_range(text):
+    start, _, end = text.partition("-")
+    return _clock(start), _clock(end)
+
+
+def _silent(seconds, kickoff=0.0, pauses=()):
+    """Nothing is said before kick-off or during a pause."""
+    return seconds < kickoff or any(a <= seconds <= b for a, b in pauses)
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
     parser.add_argument("--video", type=Path, required=True,
@@ -719,6 +735,13 @@ def main():
                              "(audio_cues.py)")
     parser.add_argument("--no-scoreboard", action="store_true",
                         help="do not read goals from the score graphic")
+    parser.add_argument("--kickoff", type=_clock, default=0.0, metavar="M:SS",
+                        help="say nothing before this time in the video "
+                             "(walkout, line-up, warm-up)")
+    parser.add_argument("--pause", type=_clock_range, action="append", default=[],
+                        metavar="M:SS-M:SS",
+                        help="say nothing in this stretch (half-time, an "
+                             "injury break); can be given more than once")
     args = parser.parse_args()
 
     name = args.video.stem
@@ -795,6 +818,9 @@ def main():
             key=lambda e: e["frame"])
     if not args.no_play:
         events = add_possession_spells(match, events, args.start_minute)
+
+    events = [e for e in events if e["type"] == "match_intro"
+              or not _silent(e["time"], args.kickoff, args.pause)]
 
     output = TRACKING_DIR / f"{name}_events.json"
     output.write_text(json.dumps(events, indent=2, ensure_ascii=False),
