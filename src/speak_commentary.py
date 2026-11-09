@@ -127,8 +127,15 @@ class FallbackVoice:
             return self.primary(text)
         except RuntimeError as exc:
             if self.backup is None:
-                print(f"{exc}\nUsing the offline MMS voice for the lines it misses.")
-                self.backup = MmsVoice()
+                print(f"\n{exc}\nUsing the offline MMS voice for the lines it misses.")
+                try:
+                    self.backup = MmsVoice()
+                except ImportError:
+                    print("The offline voice needs: pip install transformers. "
+                          "Lines the edge voice misses are left silent.")
+                    self.backup = False
+            if self.backup is False:
+                return np.zeros(int(0.2 * SAMPLE_RATE), dtype=np.float32)
             return self.backup(text)
 
 
