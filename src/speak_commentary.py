@@ -225,9 +225,11 @@ def speak(video, lines, voice, output_dir=TRACKING_DIR):
     name = Path(video).stem
     clips = []
     for index, line in enumerate(lines, 1):
+        print(f"\rVoice {index}/{len(lines)}", end="", flush=True)
         audio = voice(line["text"])
         write_wav(output_dir / f"{name}_commentary_lines" / f"{index:03d}.wav", audio)
         clips.append((float(line["time"]), audio))
+    print()
     track, starts = place_lines(clips, video_duration(video))
     wav = output_dir / f"{name}_commentary.wav"
     write_wav(wav, track)
