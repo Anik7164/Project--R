@@ -13,8 +13,9 @@ Run it after player_identity.py and before speak_commentary.py:
     python src/fill_commentary.py --video data/videos/match4.mp4
     python src/speak_commentary.py --video data/videos/match4.mp4 --voice edge
 
-It rewrites <name>_commentary.json (the event-only version is kept as
-<name>_commentary_events.json, and is the one read again on a re-run).
+It rewrites <name>_commentary.json. The event-only version is kept as
+<name>_commentary_events.json and read again on a re-run, until
+player_identity.py writes a new commentary file.
 """
 
 import project_cache  # noqa: F401  keeps downloads/caches in <project>/.cache
@@ -106,7 +107,10 @@ def main():
 
     events_only = TRACKING_DIR / f"{name}_commentary_events.json"
     output = TRACKING_DIR / f"{name}_commentary.json"
-    if not events_only.exists():
+    # A commentary file with no filler lines in it is a fresh one from
+    # player_identity.py: it replaces the event-only copy kept from before.
+    if output.exists() and (not events_only.exists() or not any(
+            l.get("type") == "filler" for l in json.loads(output.read_text(encoding="utf-8")))):
         events_only.write_text(output.read_text(encoding="utf-8"), encoding="utf-8")
     lines = [l for l in json.loads(events_only.read_text(encoding="utf-8"))]
 
