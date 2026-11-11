@@ -55,7 +55,8 @@ MAIN_ROLE = {
     "run_with_ball": "runner",
 }
 # Moments about a team, not a player: their lines never name a player.
-TEAM_EVENTS = {"big_chance", "whistle_stop", "possession_spell", "goal_celebration"}
+TEAM_EVENTS = {"big_chance", "attack", "whistle_stop", "possession_spell",
+               "goal_celebration"}
 # Events about two players: {from_player} and {to_player}.
 SECOND_ROLE = {
     "pass": "receiver",

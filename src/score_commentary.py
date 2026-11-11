@@ -33,6 +33,7 @@ WINDOW = 6.0
 STANDS_FOR = {
     "goal": ({"goal"}, (-8.0, 8.0)),
     "big_chance": ({"attack", "shot", "goal", "corner"}, (-6.0, 12.0)),
+    "attack": ({"attack", "shot", "goal", "corner"}, (-6.0, 12.0)),
     "missed_shot": ({"shot"}, (-6.0, 6.0)),
     "save": ({"shot"}, (-6.0, 6.0)),
     "whistle_stop": ({"whistle", "foul", "freekick", "card", "goal", "corner",

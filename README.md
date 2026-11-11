@@ -156,6 +156,7 @@ On test1.mp4 the model finds the corner after the 0:54 save, the foul at 1:28 an
 * **Crowd roar**: 3 dB louder than the median of the last 30 s for 1.5 s. On match1 the roars were at 4:04 and 4:37 (attacks near goal) and 7:38-7:48 (the goal at 7:49).
 * Model events are checked with them: a spotted foul or free kick needs a whistle nearby, a shot or corner a roar, and anything else (throw-in, goal kick) a confidence of 0.6, otherwise it is dropped. Two spots of the same type within 10 s are one event.
 * Where nothing else is said, a roar becomes `big_chance` ("the crowd is up, orange are attacking"), a whistle `whistle_stop` ("the referee stops play"), and a spell where one team keeps the ball `possession_spell`. These name the team, not a player, so they stay right on weak footage. `--no-audio` turns all this off.
+* Attacks the crowd did not roar for (`local_events.py`, needs `<name>_resnet152.npy` from `action_spotting.py`): a small model teaches itself on every match, with no hand-made labels. The pictures around the roars show what "the ball is near a goal" looks like from this camera in this ground; the model then finds the other moments that look the same and says an `attack` line there. Give `--kickoff` / `--pause` for the walkout, half-time and a shootout, or it learns from those roars too. `--no-picture` turns it off. On match4 (truth list of 48 events) the right lines went from 9 of 16 to 15 of 22 and the attacks mentioned from 5 to 11 of 24; on match5 in open play it added 2 lines, 1 right. Small numbers, and the settings were chosen on these two matches, so treat it as a first result.
 
 **How right is the commentary?** Write down what really happens, then score the events against it:
 
@@ -166,6 +167,14 @@ python src/review_events.py --video data/videos/match5.mp4 [--only wrong]   # wa
 ```
 
 `mark_events.py` plays the video; press g goal, s shot, a attack, f foul, k free kick, c corner, t throw-in, o goal kick, x tackle, y card, w whistle (then 1 or 2 for the team), space to pause, j/l to jump 5 s, u to undo. Or write `outputs/tracking/<name>_truth.txt` by hand, one line per event (`7:49 goal orange`). `score_commentary.py` prints each line as right, wrong or wrong team (an event of a fitting type within a few seconds, e.g. "the referee stops play" fits a whistle, foul or free kick) and the share of right lines; passes, runs and possession lines are not checked.
+
+### Training on local matches
+
+```bash
+python src/train_events.py --videos data/videos/match4.mp4 data/videos/match5.mp4
+```
+
+Learns "attack" and "stoppage" from matches that have a truth list and `<name>_resnet152.npy`, and tests itself on a match it has not seen (trained on the others, for every match in turn). It saves a model only if that test is clearly better than guessing. With match4 and match5 alone it is not (about 1.0x guessing): a model trained on one ground learns that ground, not the game. It needs more full local matches with sound and a truth list each; 8 to 10 is a fair start.
 
 `ball_tracking.py` keeps the YOLO "sports ball" detection that continues the ball's path (camera motion removed) and fills short gaps. `match_events.py` writes `outputs/tracking/test1_events.json` with each event's minute, type (names from `dataset.json`) and the players involved (scorer/assist, fouler/fouled, booked player, set-piece taker), using ball possession from the tracks:
 

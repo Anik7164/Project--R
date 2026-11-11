@@ -691,6 +691,45 @@ def add_possession_spells(match, events, start_minute=0):
     return sorted(events + added, key=lambda e: e["frame"])
 
 
+PLAY_LINES = {"pass", "long_pass", "run_with_ball", "possession_spell", "match_intro"}
+
+
+def add_attacks_from_crowd(match, events, cues, args):
+    """"attack" lines for moments that look like the ones the crowd
+    roared at (local_events.attacks_from_crowd), where no event line is
+    already said. Needs <name>_resnet152.npy from action_spotting.py."""
+    import audio_events
+    import local_events
+
+    path = local_events.features_path(args.video)
+    if not path.exists():
+        print(f"No {path.name}: attacks without a roar are not looked for "
+              f"(python src/action_spotting.py --video {args.video})")
+        return events
+    features = np.load(path)
+    capture = cv2.VideoCapture(str(args.video))
+    seconds = capture.get(cv2.CAP_PROP_FRAME_COUNT) / (capture.get(cv2.CAP_PROP_FPS) or 25.0)
+    capture.release()
+    if abs(len(features) * local_events.STEP - seconds) > 2:
+        print(f"{path.name} is from another video; make it again with action_spotting.py.")
+        return events
+    spotted = local_events.attacks_from_crowd(
+        features, cues, lambda seconds: _silent(seconds, args.kickoff, args.pause))
+    taken = [e["time"] for e in events if e["type"] not in PLAY_LINES]
+    added = []
+    for seconds, confidence in spotted:
+        if any(abs(seconds - t) <= audio_events.NEAR_EVENT_SECONDS for t in taken):
+            continue
+        # No team is named: on match4 the team with the ball just before
+        # (audio_events.attacking_team) was the wrong one for both lines
+        # that could be checked, and a wrong team is worse than none.
+        added.append(_event(match, int(seconds * match.fps), "attack", [],
+                            round(confidence, 2), "picture", args.start_minute))
+        taken.append(seconds)
+    print(f"Attacks learnt from the crowd: {len(added)}")
+    return sorted(events + added, key=lambda e: e["frame"])
+
+
 def _clock(text):
     """'1:22' or '82' -> seconds."""
     minutes, _, seconds = text.partition(":")
@@ -733,6 +772,9 @@ def main():
     parser.add_argument("--no-audio", action="store_true",
                         help="do not use the whistle and the crowd "
                              "(audio_cues.py)")
+    parser.add_argument("--no-picture", action="store_true",
+                        help="do not look for attacks the crowd did not "
+                             "roar for (local_events.py)")
     parser.add_argument("--no-scoreboard", action="store_true",
                         help="do not read goals from the score graphic")
     parser.add_argument("--kickoff", type=_clock, default=0.0, metavar="M:SS",
@@ -816,6 +858,8 @@ def main():
             match, events, cues, find_touches(match),
             lambda f, t, p, c, src: _event(match, f, t, p, c, src, args.start_minute)),
             key=lambda e: e["frame"])
+    if cues and not args.no_picture:
+        events = add_attacks_from_crowd(match, events, cues, args)
     if not args.no_play:
         events = add_possession_spells(match, events, args.start_minute)
 
