@@ -6,6 +6,8 @@ Where nothing is said for more than MAX_SILENCE seconds, a short line is
 added every EVERY seconds about what is going on at that moment: which
 team has the ball (from the ball and player tracks), the ball changing
 hands, or, when the ball is not seen, a neutral line about the game.
+In a penalty shootout (match_events.py finds it) the filler is about the
+shootout instead, and after its last kick nothing more is added.
 
 Run it after player_identity.py and before speak_commentary.py:
 
@@ -28,6 +30,7 @@ from pathlib import Path
 import cv2
 
 from match_events import TRACKING_DIR, find_touches, load_match
+from penalty_kicks import SHOOTOUT_AFTER_SECONDS
 from play_events import reliable
 
 EVERY = 5.0
@@ -35,6 +38,7 @@ MAX_SILENCE = 8.0
 LOOK_BACK = 5.0          # seconds of play a filler line describes
 KEEP_SHARE = 0.65        # share of the ball time for "team X has the ball"
 SPEECH_GAP = 3.0         # leave room after a line before the next one
+SHOOTOUT_EVERY = 15.0    # a shootout is mostly waiting: fewer filler lines
 
 KEEPING = [
     "বল এখন {team} জার্সির দলের দখলে।",
@@ -57,6 +61,28 @@ NEUTRAL = [
     "দুই দলের লড়াই চলছে সমানে সমানে।",
     "খেলা চলছে, গোলের অপেক্ষায় দর্শকরা।",
 ]
+SHOOTOUT = [
+    "টাইব্রেকারের টানটান উত্তেজনা!",
+    "নিঃশ্বাস বন্ধ করে তাকিয়ে আছেন দর্শকরা।",
+    "চাপের মুহূর্ত, চলছে স্নায়ুর লড়াই।",
+    "পেনাল্টি শুটআউটেই ঠিক হবে এই ম্যাচের ভাগ্য।",
+    "গোলরক্ষক আর শট নেওয়া খেলোয়াড়ের লড়াই, সবার চোখ স্পটের দিকে।",
+]
+
+
+def shootout_span(lines):
+    """(first, last) second of the shootout lines, or None."""
+    times = [l["time"] for l in lines if l.get("type") in ("shootout_start", "shootout_kick")]
+    return (min(times), max(times)) if times else None
+
+
+def filler_kind(at, shootout):
+    """"shootout", "play", or None (say nothing: the shootout is over)."""
+    if shootout and shootout[0] <= at <= shootout[1]:
+        return "shootout"
+    if shootout and shootout[1] < at <= shootout[1] + SHOOTOUT_AFTER_SECONDS:
+        return None
+    return "play"
 
 
 def bengali_colours(teams_csv):
@@ -125,6 +151,7 @@ def main():
     touches = sorted(reliable(match, find_touches(match)), key=lambda t: t.start)
     colours = bengali_colours(TRACKING_DIR / f"{name}_teams.csv")
 
+    shootout = shootout_span(lines)
     spoken = sorted(l["time"] for l in lines)
     marks = [max(args.start, spoken[0] if spoken else 0.0)] + spoken + [duration]
     fillers, last_text, last_team = [], None, None
@@ -136,8 +163,14 @@ def main():
             if at < args.start:
                 at += args.every
                 continue
-            team, _ = ball_team(touches, fps, at)
-            if team and team in colours:
+            kind = filler_kind(at, shootout)
+            if kind is None:
+                at += args.every
+                continue
+            team = None if kind == "shootout" else ball_team(touches, fps, at)[0]
+            if kind == "shootout":
+                text = pick(SHOOTOUT, last_text, rng)
+            elif team and team in colours:
                 options = CHANGE if last_team and last_team != team else KEEPING
                 last_team = team
                 text = pick(options, last_text, rng).format(team=colours[team])
@@ -146,7 +179,7 @@ def main():
             fillers.append({"time": round(at, 2), "minute": int(at // 60) + 1,
                             "type": "filler", "text": text})
             last_text = text
-            at += args.every
+            at += max(args.every, SHOOTOUT_EVERY) if kind == "shootout" else args.every
 
     merged = sorted(lines + fillers, key=lambda l: l["time"])
     output.write_text(json.dumps(merged, indent=2, ensure_ascii=False), encoding="utf-8")
