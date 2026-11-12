@@ -1073,8 +1073,9 @@ class LiveMatch:
         events = [e for e in rules.add_play_events(match, events, 0)
                   if e["type"] != "match_intro"]
         if cues:
+            # (the penalties count as said, so a kick's roar is not a second line)
             events += audio_events.events_from_sound(
-                match, events, cues, rules.find_touches(match), make)
+                match, events + penalties, cues, rules.find_touches(match), make)
         events = rules.add_possession_spells(match, sorted(events, key=lambda e: e["frame"]), 0)
         events = [e for e in events if not quiet(e["time"])] + penalties
 

@@ -537,7 +537,7 @@ function wire() {
     delay = Number(event.target.value);
     localStorage.setItem("delay", delay);
     $("delayOut").textContent = `${delay} s`;
-    if (frames.length || newest) retime(newest);
+    if (frames.length || newest) { base = null; retime(newest); }
     if (stats) $("lagText").textContent = delay ? `${delay} s behind` : "";
   };
   $("matchVolume").oninput = (event) => { if (matchGain) matchGain.gain.value = event.target.value / 100; };
