@@ -12,7 +12,7 @@ shootout instead, and after its last kick nothing more is added.
 Run it after player_identity.py and before speak_commentary.py:
 
     python src/player_identity.py --video data/videos/match4.mp4
-    python src/fill_commentary.py --video data/videos/match4.mp4
+    python src/fill_commentary.py --video data/videos/match4.mp4 [--kickoff 1:22] [--pause 7:13-7:25]
     python src/speak_commentary.py --video data/videos/match4.mp4 --voice edge
 
 It rewrites <name>_commentary.json. The event-only version is kept as
@@ -29,7 +29,7 @@ from pathlib import Path
 
 import cv2
 
-from match_events import TRACKING_DIR, find_touches, load_match
+from match_events import TRACKING_DIR, _clock, _clock_range, _silent, find_touches, load_match
 from penalty_kicks import SHOOTOUT_AFTER_SECONDS
 from play_events import reliable
 
@@ -126,6 +126,13 @@ def main():
                         help="seconds between filler lines (default 5)")
     parser.add_argument("--start", type=float, default=0.0,
                         help="no filler before this second (intro)")
+    parser.add_argument("--kickoff", type=_clock, default=0.0, metavar="M:SS",
+                        help="no filler before this time (walkout, line-up); "
+                             "give the same as to match_events.py")
+    parser.add_argument("--pause", type=_clock_range, action="append", default=[],
+                        metavar="M:SS-M:SS",
+                        help="no filler in this stretch (half-time); can be "
+                             "given more than once")
     parser.add_argument("--seed", type=int, default=7)
     args = parser.parse_args()
     name = args.video.stem
@@ -164,7 +171,7 @@ def main():
                 at += args.every
                 continue
             kind = filler_kind(at, shootout)
-            if kind is None:
+            if kind is None or _silent(at, args.kickoff, args.pause):
                 at += args.every
                 continue
             team = None if kind == "shootout" else ball_team(touches, fps, at)[0]
