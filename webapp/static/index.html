@@ -1,0 +1,179 @@
+<!doctype html>
+<html lang="bn">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Project R · লাইভ ধারাভাষ্য</title>
+<link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+<header class="top">
+  <div class="brand">
+    <span class="mark" aria-hidden="true"></span>
+    <div>
+      <h1>লাইভ ধারাভাষ্য</h1>
+      <p>Project R · live Bengali football commentary</p>
+    </div>
+  </div>
+  <div class="status" id="status"><span class="dot"></span><span id="statusText">Not connected</span></div>
+</header>
+
+<main class="layout">
+  <section class="stage-col">
+    <div class="scoreboard" id="scoreboard">
+      <div class="team left"><span class="kit" id="kitA"></span><span class="name" id="nameA">দল ক</span></div>
+      <div class="score"><b id="scoreA">0</b><span class="clock"><span id="minute">–</span><small id="phase">waiting</small></span><b id="scoreB">0</b></div>
+      <div class="team right"><span class="name" id="nameB">দল খ</span><span class="kit" id="kitB"></span></div>
+    </div>
+
+    <div class="stage" id="stage">
+      <canvas id="picture" width="960" height="540"></canvas>
+      <video id="finishedVideo" controls playsinline hidden></video>
+      <div class="idle" id="idle">
+        <p class="bn">ম্যাচ শুরুর অপেক্ষায়</p>
+        <p id="idleText">Choose a camera, a stream or a video below and press Start.</p>
+      </div>
+      <button class="sound-on" id="soundOn" hidden>Turn sound on</button>
+      <div class="badge" id="liveBadge" hidden><span></span><b id="liveText">LIVE</b><small id="lagText"></small></div>
+      <div class="caption" id="caption" hidden><p class="bn" id="captionText"></p></div>
+    </div>
+
+    <div class="tiles" id="tiles">
+      <div><small>Analysed</small><b id="tRate">–</b><span>frames/s</span></div>
+      <div><small>Players in view</small><b id="tPlayers">–</b></div>
+      <div><small>Ball seen</small><b id="tBall">–</b><span>last 10 s</span></div>
+      <div><small>Whistles</small><b id="tWhistles">–</b></div>
+      <div><small>Crowd roars</small><b id="tRoars">–</b></div>
+      <div><small>Frames skipped</small><b id="tDropped">–</b></div>
+    </div>
+
+    <div class="viewer-controls">
+      <label>Picture delay <output id="delayOut">10 s</output>
+        <input type="range" id="delay" min="0" max="40" step="1" value="10">
+      </label>
+      <label>Match sound
+        <input type="range" id="matchVolume" min="0" max="100" value="35">
+      </label>
+      <label>Commentary voice
+        <input type="range" id="voiceVolume" min="0" max="100" value="100">
+      </label>
+    </div>
+    <p class="hint">The picture is shown a few seconds late so each line lands on the moment it describes. A goal is only known after the celebration (about 25 s), so set the delay to 30 s if goals should be called on time.</p>
+
+    <section class="control" id="control" hidden>
+      <div class="panel">
+        <h2>Match feed</h2>
+        <div class="tabs" role="tablist">
+          <button role="tab" data-kind="camera" aria-selected="true">Camera</button>
+          <button role="tab" data-kind="url" aria-selected="false">Stream</button>
+          <button role="tab" data-kind="file" aria-selected="false">Video</button>
+        </div>
+        <div class="tab" data-for="camera">
+          <label>Camera number <input type="number" id="cameraIndex" min="0" max="9" value="0"></label>
+          <label>Microphone (for whistle and crowd)
+            <input type="text" id="mic" list="mics" placeholder="leave empty for no sound">
+            <datalist id="mics"></datalist>
+          </label>
+        </div>
+        <div class="tab" data-for="url" hidden>
+          <label>Stream address <input type="text" id="streamUrl" placeholder="rtsp://192.168.0.10:8554/match"></label>
+          <p class="hint">A phone works as the camera with an RTSP camera app on the same Wi-Fi.</p>
+        </div>
+        <div class="tab" data-for="file" hidden>
+          <label>Video <select id="videoName"></select></label>
+          <label class="upload">Add a video <input type="file" id="uploadFile" accept="video/*"></label>
+          <progress id="uploadProgress" max="100" value="0" hidden></progress>
+          <label>Start at <input type="text" id="startAt" placeholder="0:00" size="6"></label>
+          <label class="check"><input type="checkbox" id="realtime" checked> Play at match speed (skip frames if this PC is slow)</label>
+          <button class="ghost" id="playFinished" hidden>Play the finished commentary of this video</button>
+        </div>
+        <div class="row">
+          <label>Voice
+            <select id="voice">
+              <option value="edge">Natural (needs internet)</option>
+              <option value="mms">Offline</option>
+              <option value="off">Text only</option>
+            </select>
+          </label>
+          <label>Speaker
+            <select id="speaker"><option value="male">Male</option><option value="female">Female</option></select>
+          </label>
+          <label>Frames analysed per second
+            <select id="processFps">
+              <option>6</option><option>8</option><option selected>12</option><option>15</option><option>25</option>
+            </select>
+          </label>
+          <label>Players
+            <select id="peopleModel">
+              <option value="auto">Automatic</option>
+              <option value="football">Football model (far camera)</option>
+              <option value="coco">General model (close camera)</option>
+            </select>
+          </label>
+        </div>
+        <label class="check"><input type="checkbox" id="boxes" checked> Draw players and ball on the picture</label>
+        <div class="actions">
+          <button class="primary" id="start">Start</button>
+          <button class="danger" id="stop" disabled>Stop</button>
+          <span class="error" id="error" role="alert"></span>
+        </div>
+      </div>
+
+      <div class="panel">
+        <h2>Match control</h2>
+        <p class="hint">The clock, and what one camera cannot see. Each button is said in Bengali straight away.</p>
+        <div class="buttons">
+          <button data-action="kickoff">Kick-off</button>
+          <button data-action="half_time">Half-time</button>
+          <button data-action="second_half">Second half</button>
+          <button data-action="shootout">Penalty shootout</button>
+          <button data-action="full_time">Full time</button>
+          <button data-action="pause">Pause commentary</button>
+          <button data-action="resume">Resume</button>
+        </div>
+        <div class="team-controls">
+          <div class="team-box" data-team="team_a">
+            <h3><span class="kit" id="kitA2"></span><span id="labelA">Team A</span>
+              <select class="colour" data-team="team_a" aria-label="Kit colour of team A"></select></h3>
+            <div class="buttons">
+              <button data-action="goal" class="goal">Goal</button>
+              <button data-action="yellow_card" class="yellow">Yellow</button>
+              <button data-action="red_card" class="red">Red</button>
+              <button data-action="corner_kick">Corner</button>
+              <button data-action="freekick">Free kick</button>
+              <button data-action="penalty">Penalty</button>
+              <button data-action="undo_goal" class="ghost">Take a goal back</button>
+            </div>
+          </div>
+          <div class="team-box" data-team="team_b">
+            <h3><span class="kit" id="kitB2"></span><span id="labelB">Team B</span>
+              <select class="colour" data-team="team_b" aria-label="Kit colour of team B"></select></h3>
+            <div class="buttons">
+              <button data-action="goal" class="goal">Goal</button>
+              <button data-action="yellow_card" class="yellow">Yellow</button>
+              <button data-action="red_card" class="red">Red</button>
+              <button data-action="corner_kick">Corner</button>
+              <button data-action="freekick">Free kick</button>
+              <button data-action="penalty">Penalty</button>
+              <button data-action="undo_goal" class="ghost">Take a goal back</button>
+            </div>
+          </div>
+        </div>
+      </div>
+    </section>
+  </section>
+
+  <aside class="feed-col">
+    <div class="feed-head">
+      <h2>ধারাভাষ্য</h2>
+      <span id="lineCount">0 lines</span>
+    </div>
+    <ol class="feed" id="feed" aria-live="polite"></ol>
+    <p class="empty" id="feedEmpty">Lines appear here as the match is played.</p>
+    <ul class="notes" id="notes"></ul>
+  </aside>
+</main>
+
+<script src="/static/app.js"></script>
+</body>
+</html>

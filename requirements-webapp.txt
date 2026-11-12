@@ -1,0 +1,7 @@
+# The live commentary web app (webapp/server.py), on top of requirements.txt.
+#   pip install -r requirements-webapp.txt
+fastapi>=0.110
+uvicorn[standard]>=0.29   # with websockets
+python-multipart          # video upload from the page
+edge-tts>=6.1             # natural Bengali voice (online)
+imageio-ffmpeg            # ffmpeg, for the match sound, when it is not on PATH

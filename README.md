@@ -39,8 +39,39 @@ flowchart TD
     
     G --> H["Synced Audio Broadcast"]
     F --> H
+```
 
 ---
+
+## 🔴 Live commentary web app
+
+`webapp/` runs the pipeline while the match is played and shows it in a browser: the picture, the Bengali lines, the voice, a scoreboard.
+
+```powershell
+pip install -r requirements-webapp.txt
+python webapp/server.py                  # then open http://127.0.0.1:8000
+python webapp/server.py --host 0.0.0.0   # phones and laptops on the same Wi-Fi can watch too
+```
+
+On the page choose the match feed and press **Start**:
+
+| Feed | What to give |
+|---|---|
+| Camera | the camera number (0 is the first one) and, for whistle and crowd, the microphone |
+| Stream | an address such as `rtsp://192.168.0.10:8554/match` (a phone with an RTSP camera app works) |
+| Video | a file from `data/videos/` (or add one on the page); it is played as if it were live |
+
+What happens (`webapp/live_engine.py`): every frame goes through the same detector, BoT-SORT + stable IDs, ball selection and kit-colour sampling as the offline scripts; the sound goes through `audio_cues.py` as it arrives; every 2 s the rules of `match_events.py`, `play_events.py`, `audio_events.py` and `penalty_kicks.py` are asked again about the last 4 minutes, and what is new becomes a line (`player_identity.py`), with a filler line in the silences (`fill_commentary.py`). Each line is spoken (the natural online voice, or the offline MMS voice) and sent to every open page.
+
+An event can only be said once its rule has seen enough: a whistle or a crowd roar about 9 s later, a goal (roar + celebration huddle) about 26 s later. So the page shows the picture a few seconds late (**Picture delay**, 10 s by default, per viewer) and each line lands on the moment it is about; set it to 30 s if goals should be called on time.
+
+**Match control** is for the person at the camera: kick-off, half-time, second half, penalty shootout and full time set the match clock (nothing is said before kick-off or in a break; in a shootout only the kicks are said), and the Goal / Yellow / Red / Corner / Free kick / Penalty buttons say in Bengali what one camera cannot see. The kit colours the system found can be corrected there too. With `--host 0.0.0.0` only the address with `?key=...` printed in the terminal has these buttons; everybody else can only watch.
+
+Not live yet: cards and the scoreboard (they scan the whole video), jersey numbers and names, the SoccerNet event model. Players are named by kit colour.
+
+Every session is kept in `outputs/live/<start time>/`: `commentary.json` (each line with the moment it is about and how many seconds later it was known), `events.json`, `summary.json` and the spoken lines.
+
+A video in the list marked "finished" already has `outputs/tracking/<name>_commentary.json` from the offline scripts; **Play the finished commentary** plays it back with its lines.
 
 ## 💾 Disk use
 
