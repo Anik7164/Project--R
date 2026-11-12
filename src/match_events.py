@@ -734,6 +734,31 @@ def add_attacks_from_crowd(match, events, cues, args):
     return sorted(events + added, key=lambda e: e["frame"])
 
 
+def add_attacks_from_positions(match, events, args):
+    """"attack" lines from where the players and the ball are
+    (position_events.py), where no event line is already said."""
+    import audio_events
+    import position_events
+
+    capture = cv2.VideoCapture(str(args.video))
+    size = (capture.get(cv2.CAP_PROP_FRAME_WIDTH), capture.get(cv2.CAP_PROP_FRAME_HEIGHT))
+    capture.release()
+    if not size[0] or not size[1]:
+        return events
+    spotted = position_events.attacks(
+        match, *size, lambda seconds: _silent(seconds, args.kickoff, args.pause))
+    taken = [e["time"] for e in events if e["type"] not in PLAY_LINES]
+    added = []
+    for seconds, confidence in spotted:
+        if any(abs(seconds - t) <= audio_events.NEAR_EVENT_SECONDS for t in taken):
+            continue
+        added.append(_event(match, int(seconds * match.fps), "attack", [],
+                            round(confidence, 2), "positions", args.start_minute))
+        taken.append(seconds)
+    print(f"Attacks from player and ball positions: {len(added)}")
+    return sorted(events + added, key=lambda e: e["frame"])
+
+
 def find_penalty_kicks(match, cues, args):
     """(penalty lines, shootouts): penalty_kicks.find() as events. A
     shootout is [start, end] in seconds; main() says nothing else there."""
@@ -796,6 +821,11 @@ def main():
     parser.add_argument("--no-picture", action="store_true",
                         help="do not look for attacks the crowd did not "
                              "roar for (local_events.py)")
+    parser.add_argument("--positions", action="store_true",
+                        help="also look for attacks in the player and ball "
+                             "positions (position_events.py); off by default: "
+                             "it mentions more real events but half its lines "
+                             "are wrong")
     parser.add_argument("--no-penalties", action="store_true",
                         help="do not look for penalty kicks and shootouts "
                              "(penalty_kicks.py)")
@@ -892,6 +922,8 @@ def main():
             key=lambda e: e["frame"])
     if cues and not args.no_picture:
         events = add_attacks_from_crowd(match, events, cues, args)
+    if args.positions:
+        events = add_attacks_from_positions(match, events, args)
     if not args.no_play:
         events = add_possession_spells(match, events, args.start_minute)
 

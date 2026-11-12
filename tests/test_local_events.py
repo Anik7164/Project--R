@@ -78,3 +78,21 @@ def test_an_attack_line_is_right_near_a_real_attack():
                          {"time": 300.0, "type": "attack"}], truth, {})
     assert [verdict for _, verdict, _ in lines] == ["right", "wrong"]
     assert used == {0}
+
+
+def test_position_scores_pick_out_the_stretch_that_differs_like_an_attack():
+    import position_events
+    from match_events import MatchData
+
+    fps, tracks, ball, seen = 25.0, {}, {}, set()
+    for frame in range(int(300 * fps)):
+        attack = 200 <= frame / fps < 245
+        count = 3 if attack else 10
+        tracks[frame] = [(i, (100.0 + 100 * i, 300.0, 140.0 + 100 * i, 400.0)) for i in range(count)]
+        x = 1200.0 if attack else 640.0
+        ball[frame] = (x, 360.0, x, 360.0, 1)
+        seen.add(frame)
+    match = MatchData(fps=fps, tracks=tracks, teams={}, ball=ball, ball_detected=seen)
+    found = position_events.attacks(match, 1280, 720)
+    assert found and all(195 <= seconds <= 250 for seconds, _ in found)
+    assert position_events.attacks(match, 1280, 720, quiet=lambda s: True) == []
