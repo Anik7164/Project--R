@@ -39,8 +39,39 @@ flowchart TD
     
     G --> H["Synced Audio Broadcast"]
     F --> H
+```
 
 ---
+
+## 🔴 Live commentary web app
+
+`webapp/` runs the pipeline while the match is played and shows it in a browser: the picture, the Bengali lines, the voice, a scoreboard.
+
+```powershell
+pip install -r requirements-webapp.txt
+python webapp/server.py                  # then open http://127.0.0.1:8000
+python webapp/server.py --host 0.0.0.0   # phones and laptops on the same Wi-Fi can watch too
+```
+
+On the page choose the match feed and press **Start**:
+
+| Feed | What to give |
+|---|---|
+| Camera | the camera number (0 is the first one) and, for whistle and crowd, the microphone |
+| Stream | an address such as `rtsp://192.168.0.10:8554/match` (a phone with an RTSP camera app works) |
+| Video | a file from `data/videos/` (or add one on the page); it is played as if it were live |
+
+What happens (`webapp/live_engine.py`): every frame goes through the same detector, BoT-SORT + stable IDs, ball selection and kit-colour sampling as the offline scripts; the sound goes through `audio_cues.py` as it arrives; every 2 s the rules of `match_events.py`, `play_events.py`, `audio_events.py` and `penalty_kicks.py` are asked again about the last 4 minutes, and what is new becomes a line (`player_identity.py`), with a filler line in the silences (`fill_commentary.py`). Each line is spoken (the natural online voice, or the offline MMS voice) and sent to every open page.
+
+An event can only be said once its rule has seen enough: a whistle or a crowd roar about 9 s later, a goal (roar + celebration huddle) about 26 s later. So the page shows the picture a few seconds late (**Picture delay**, 10 s by default, per viewer) and each line lands on the moment it is about; set it to 30 s if goals should be called on time.
+
+**Match control** is for the person at the camera: kick-off, half-time, second half, penalty shootout and full time set the match clock (nothing is said before kick-off or in a break; in a shootout only the kicks are said), and the Goal / Yellow / Red / Corner / Free kick / Penalty buttons say in Bengali what one camera cannot see. The kit colours the system found can be corrected there too. With `--host 0.0.0.0` only the address with `?key=...` printed in the terminal has these buttons; everybody else can only watch.
+
+Not live yet: cards and the scoreboard (they scan the whole video), jersey numbers and names, the SoccerNet event model. Players are named by kit colour.
+
+Every session is kept in `outputs/live/<start time>/`: `commentary.json` (each line with the moment it is about and how many seconds later it was known), `events.json`, `summary.json` and the spoken lines.
+
+A video in the list marked "finished" already has `outputs/tracking/<name>_commentary.json` from the offline scripts; **Play the finished commentary** plays it back with its lines.
 
 ## 💾 Disk use
 
@@ -156,7 +187,9 @@ On test1.mp4 the model finds the corner after the 0:54 save, the foul at 1:28 an
 * **Crowd roar**: 3 dB louder than the median of the last 30 s for 1.5 s. On match1 the roars were at 4:04 and 4:37 (attacks near goal) and 7:38-7:48 (the goal at 7:49).
 * Model events are checked with them: a spotted foul or free kick needs a whistle nearby, a shot or corner a roar, and anything else (throw-in, goal kick) a confidence of 0.6, otherwise it is dropped. Two spots of the same type within 10 s are one event.
 * Where nothing else is said, a roar becomes `big_chance` ("the crowd is up, orange are attacking"), a whistle `whistle_stop` ("the referee stops play"), and a spell where one team keeps the ball `possession_spell`. These name the team, not a player, so they stay right on weak footage. `--no-audio` turns all this off.
-* Attacks the crowd did not roar for (`local_events.py`, needs `<name>_resnet152.npy` from `action_spotting.py`): a small model teaches itself on every match, with no hand-made labels. The pictures around the roars show what "the ball is near a goal" looks like from this camera in this ground; the model then finds the other moments that look the same and says an `attack` line there. Give `--kickoff` / `--pause` for the walkout, half-time and a shootout, or it learns from those roars too. `--no-picture` turns it off. On match4 (truth list of 48 events) the right lines went from 9 of 16 to 15 of 22 and the attacks mentioned from 5 to 11 of 24; on match5 in open play it added 2 lines, 1 right. Small numbers, and the settings were chosen on these two matches, so treat it as a first result.
+* Attacks the crowd did not roar for (`local_events.py`, needs `<name>_resnet152.npy` from `action_spotting.py`): a small model teaches itself on every match, with no hand-made labels. The pictures around the roars show what "the ball is near a goal" looks like from this camera in this ground; the model then finds the other moments that look the same and says an `attack` line there. Give `--kickoff` / `--pause` for the walkout and half-time, or it learns from those roars too (a shootout is found and left out by itself, see below). `--no-picture` turns it off. On match4 (truth list of 48 events) the right lines went from 9 of 16 to 15 of 22 and the attacks mentioned from 5 to 11 of 24; on match5 in open play it added 2 lines, 1 right. Small numbers, and the settings were chosen on these two matches, so treat it as a first result.
+* Attacks from player and ball positions (`position_events.py`, **off unless `--positions`**): six numbers from the tracks (players in view, where they stand, their size, ball off the middle, ball height, ball speed), each against the match's own average. Unlike the picture model these did carry over from one match to the other (clearest 10%: match4 11 of 15 right against 64% at random, match5 8 of 13 against 40%). In the whole pipeline it added 5 lines per match of which half were right and mentioned 3 more real shots, so the share of right lines fell slightly (67% to 65%, 71% to 67%). Kept for when the ball detector is better. Training on a labelled half of SoccerTrack v2 (fixed whole-pitch camera) did not carry over to local footage at all (0.8 to 1.0 times guessing).
+* **Penalty kicks and shootouts** (`penalty_kicks.py`, no model, no labels): before a penalty everybody stands and waits. The speed of the tracked players is measured in body heights per second (so the camera distance does not matter); a stretch of 12 s or more under 0.25 ends in the kick. Three or more such kicks, each within 3 minutes of the one before, are a shootout: it gets one `shootout_start` line and a `shootout_kick` line per kick, a strong roar far from every kick found counts as one more kick, and nothing else is said there (the roars and huddles in a shootout are not attacks or goals; no `--pause` is needed for it any more). A single long wait is a `penalty_kick` only if the crowd roars as it ends. `--no-penalties` turns it off. On the one shootout there is footage of (match5, 8 kicks) it finds all 8, each within 2 s, with none in the 11 minutes of open play before it and none in match4; the settings were chosen on that shootout, and a penalty in open play has not been seen yet, so that part is untested. Over the whole of match5 (only `--kickoff 1:22 --pause 7:13-7:25` given) the right lines went from 16 of 37 (43%) to 24 of 34 (71%) and the penalties mentioned from 0 to 8 of 8, because the wrong attack, whistle and goal lines in the shootout are gone as well. Whether the kick went in is not said (the crowd roars for a save too), and no team is named.
 
 **How right is the commentary?** Write down what really happens, then score the events against it:
 
@@ -166,7 +199,7 @@ python src/score_commentary.py --video data/videos/match5.mp4
 python src/review_events.py --video data/videos/match5.mp4 [--only wrong]   # watch every line with its verdict
 ```
 
-`mark_events.py` plays the video; press g goal, s shot, a attack, f foul, k free kick, c corner, t throw-in, o goal kick, x tackle, y card, w whistle (then 1 or 2 for the team), space to pause, j/l to jump 5 s, u to undo. Or write `outputs/tracking/<name>_truth.txt` by hand, one line per event (`7:49 goal orange`). `score_commentary.py` prints each line as right, wrong or wrong team (an event of a fitting type within a few seconds, e.g. "the referee stops play" fits a whistle, foul or free kick) and the share of right lines; passes, runs and possession lines are not checked.
+`mark_events.py` plays the video; press g goal, s shot, a attack, f foul, k free kick, c corner, t throw-in, o goal kick, x tackle, y card, w whistle, p penalty kick (then 1 or 2 for the team), space to pause, j/l to jump 5 s, u to undo. Or write `outputs/tracking/<name>_truth.txt` by hand, one line per event (`7:49 goal orange`). `score_commentary.py` prints each line as right, wrong or wrong team (an event of a fitting type within a few seconds, e.g. "the referee stops play" fits a whistle, foul or free kick) and the share of right lines; passes, runs and possession lines are not checked.
 
 ### Training on local matches
 

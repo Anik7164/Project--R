@@ -33,6 +33,7 @@ from appearance import HUE_NAMES
 
 # Frames sampled to find the scoreboard.
 LOCATE_STEP = 25
+LOCATE_SAMPLES = 200
 # Only the top of the frame is searched.
 TOP_FRACTION = 0.25
 # A pixel is part of the scoreboard if it is this close to its median
@@ -63,20 +64,22 @@ def locate_scoreboard(video_path):
     capture = cv2.VideoCapture(str(video_path))
     total = int(capture.get(cv2.CAP_PROP_FRAME_COUNT))
     samples = []
-    for index in range(0, max(total, 1), LOCATE_STEP):
+    # All samples are held in memory: a full match gets LOCATE_SAMPLES
+    # spread over it, not one per second (that took over 10 GB for 20 min).
+    for index in range(0, max(total, 1), max(LOCATE_STEP, total // LOCATE_SAMPLES)):
         capture.set(cv2.CAP_PROP_POS_FRAMES, index)
         ok, frame = capture.read()
         if not ok:
             break
-        top = frame[: int(frame.shape[0] * TOP_FRACTION)]
-        samples.append(top.astype(np.int16))
+        samples.append(frame[: int(frame.shape[0] * TOP_FRACTION)].copy())
     capture.release()
     if len(samples) < 5:
         return None, None
 
     stack = np.array(samples)
     median = np.median(stack, axis=0)
-    close = (np.abs(stack - median).max(axis=-1) < STATIC_TOLERANCE).mean(axis=0)
+    close = np.mean([np.abs(sample - median).max(axis=-1) < STATIC_TOLERANCE
+                     for sample in stack], axis=0)
     mask = (close >= STATIC_SHARE).astype(np.uint8)
     mask = cv2.morphologyEx(mask, cv2.MORPH_CLOSE, np.ones((5, 5), np.uint8))
     count, _, stats, _ = cv2.connectedComponentsWithStats(mask)

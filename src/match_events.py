@@ -19,6 +19,10 @@ What happened is decided in one of two ways:
     taken by a goalkeeper is a goal kick; a free kick implies a foul by the
     opponent nearest to the fouled player just before play stopped.
 
+Penalty kicks and shootouts come from the players standing still for a
+long time before the kick (penalty_kicks.py); in a shootout nothing else
+is said.
+
 Who was involved is decided from ball possession:
   * goal: the last player to touch the ball (scorer) and the previous
     teammate to touch it (assist);
@@ -730,6 +734,48 @@ def add_attacks_from_crowd(match, events, cues, args):
     return sorted(events + added, key=lambda e: e["frame"])
 
 
+def add_attacks_from_positions(match, events, args):
+    """"attack" lines from where the players and the ball are
+    (position_events.py), where no event line is already said."""
+    import audio_events
+    import position_events
+
+    capture = cv2.VideoCapture(str(args.video))
+    size = (capture.get(cv2.CAP_PROP_FRAME_WIDTH), capture.get(cv2.CAP_PROP_FRAME_HEIGHT))
+    capture.release()
+    if not size[0] or not size[1]:
+        return events
+    spotted = position_events.attacks(
+        match, *size, lambda seconds: _silent(seconds, args.kickoff, args.pause))
+    taken = [e["time"] for e in events if e["type"] not in PLAY_LINES]
+    added = []
+    for seconds, confidence in spotted:
+        if any(abs(seconds - t) <= audio_events.NEAR_EVENT_SECONDS for t in taken):
+            continue
+        added.append(_event(match, int(seconds * match.fps), "attack", [],
+                            round(confidence, 2), "positions", args.start_minute))
+        taken.append(seconds)
+    print(f"Attacks from player and ball positions: {len(added)}")
+    return sorted(events + added, key=lambda e: e["frame"])
+
+
+def find_penalty_kicks(match, cues, args):
+    """(penalty lines, shootouts): penalty_kicks.find() as events. A
+    shootout is [start, end] in seconds; main() says nothing else there."""
+    import penalty_kicks
+
+    kicks, shootouts = penalty_kicks.find(
+        match, cues, lambda seconds: _silent(seconds, args.kickoff, args.pause))
+    events = [_event(match, int(seconds * match.fps), kind, [], 0.7, "stillness",
+                     args.start_minute) for seconds, kind in kicks]
+    events += [_event(match, int(start * match.fps), "shootout_start", [], 0.7,
+                      "stillness", args.start_minute) for start, _ in shootouts]
+    if kicks:
+        print(f"Penalty kicks (players stand still, then the kick): {len(kicks)}"
+              + (f", {len(shootouts)} shootout" if shootouts else ""))
+    return events, shootouts
+
+
 def _clock(text):
     """'1:22' or '82' -> seconds."""
     minutes, _, seconds = text.partition(":")
@@ -775,6 +821,14 @@ def main():
     parser.add_argument("--no-picture", action="store_true",
                         help="do not look for attacks the crowd did not "
                              "roar for (local_events.py)")
+    parser.add_argument("--positions", action="store_true",
+                        help="also look for attacks in the player and ball "
+                             "positions (position_events.py); off by default: "
+                             "it mentions more real events but half its lines "
+                             "are wrong")
+    parser.add_argument("--no-penalties", action="store_true",
+                        help="do not look for penalty kicks and shootouts "
+                             "(penalty_kicks.py)")
     parser.add_argument("--no-scoreboard", action="store_true",
                         help="do not read goals from the score graphic")
     parser.add_argument("--kickoff", type=_clock, default=0.0, metavar="M:SS",
@@ -839,6 +893,14 @@ def main():
         if before != len(events):
             print(f"Dropped {before - len(events)} model events the sound does not back up")
 
+    penalties = []
+    if not args.no_penalties:
+        # A shootout is not play: the roars, the "goal" huddles and the
+        # ball changing feet there mean something else, so only the kicks
+        # are said (as a pause, so nothing below learns from it either).
+        penalties, shootouts = find_penalty_kicks(match, cues, args)
+        args.pause = args.pause + shootouts
+
     if cues and not any(e["type"] == "goal" for e in events):
         # No scoreboard goals: a long roar and a celebration huddle.
         goals = audio_events.goals_from_sound(
@@ -860,11 +922,14 @@ def main():
             key=lambda e: e["frame"])
     if cues and not args.no_picture:
         events = add_attacks_from_crowd(match, events, cues, args)
+    if args.positions:
+        events = add_attacks_from_positions(match, events, args)
     if not args.no_play:
         events = add_possession_spells(match, events, args.start_minute)
 
     events = [e for e in events if e["type"] == "match_intro"
               or not _silent(e["time"], args.kickoff, args.pause)]
+    events = sorted(events + penalties, key=lambda e: e["frame"])
 
     output = TRACKING_DIR / f"{name}_events.json"
     output.write_text(json.dumps(events, indent=2, ensure_ascii=False),
