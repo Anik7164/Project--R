@@ -57,9 +57,13 @@ On the page choose the match feed and press **Start**:
 
 | Feed | What to give |
 |---|---|
-| Camera | the camera number (0 is the first one) and, for whistle and crowd, the microphone |
+| Camera | one or two cameras, each chosen by hand (see below), and, for whistle and crowd, the microphone |
 | Stream | an address such as `rtsp://192.168.0.10:8554/match` (a phone with an RTSP camera app works) |
 | Video | a file from `data/videos/` (or add one on the page); it is played as if it were live |
+
+**Camera 1 and camera 2.** With "2 cameras" each camera gets its own list of devices: the cameras plugged into the PC (with their names on Windows), a network camera by its address, and every phone that is sending its camera. You decide which device is camera 1 and which is camera 2; **Show its picture** takes one picture from a device so you can see which is which, and **Swap** exchanges them. The commentary comes from camera 1. Camera 2 is shown as the small picture in the corner (click it to make it the big one); it is not analysed yet.
+
+**Nothing is said without a match in the picture.** The status only turns to "Live" once the first picture has arrived and been analysed, and commentary is on hold (with the reason shown over the picture) while the camera sends no pictures, the picture is black or frozen, or for 20 s neither the ball nor two players together were seen. The match-control buttons refuse while there is no picture. **Stop** ends the commentary at once: lines and pictures the page was still holding back for the picture delay are dropped. "Say nothing unless…" in the settings changes how many players are needed, or switches the check off.
 
 What happens (`webapp/live_engine.py`): every frame goes through the same detector, BoT-SORT + stable IDs, ball selection and kit-colour sampling as the offline scripts; the sound goes through `audio_cues.py` as it arrives; every 2 s the rules of `match_events.py`, `play_events.py`, `audio_events.py` and `penalty_kicks.py` are asked again about the last 4 minutes, and what is new becomes a line (`player_identity.py`), with a filler line in the silences (`fill_commentary.py`). Each line is spoken (the natural online voice, or the offline MMS voice) and sent to every open page.
 
@@ -72,6 +76,26 @@ Not live yet: cards and the scoreboard (they scan the whole video), jersey numbe
 Every session is kept in `outputs/live/<start time>/`: `commentary.json` (each line with the moment it is about and how many seconds later it was known), `events.json`, `summary.json` and the spoken lines.
 
 A video in the list marked "finished" already has `outputs/tracking/<name>_commentary.json` from the offline scripts; **Play the finished commentary** plays it back with its lines.
+
+### Desktop app
+
+`desktop/app.py` is the same page in a window of its own. It starts the server itself and stops it when the window is closed, so there is no terminal to keep open.
+
+```powershell
+pip install -r requirements-desktop.txt     # pywebview, a few MB; uses the WebView2 that Windows 10/11 already has
+python desktop/app.py                       # or double-click  desktop\Project R.bat
+python desktop/app.py --share               # phones and other PCs on the Wi-Fi can join
+python desktop/app.py --connect 192.168.0.5 # only a window onto the PC that runs the match
+powershell -ExecutionPolicy Bypass -File desktop\make_shortcut.ps1    # a "Project R" shortcut with the icon
+```
+
+Without pywebview it opens an Edge or Chrome app window instead. Its settings and the server log stay in `.cache/desktop/` inside the project. (pywebview was chosen over Electron or Tauri because it needs no Node.js or Rust toolchain and no 300 MB browser of its own: the heavy part of this project is the Python engine, which has to be installed anyway.)
+
+### iPhone app
+
+`mobile/` wraps the same pages as an iPhone app that connects to the PC over Wi-Fi: watch, operate, or use the phone as camera 1 or camera 2. See [mobile/README.md](mobile/README.md) for the no-install way (Safari → Add to Home Screen), the cloud build of the .ipa and how to put it on a phone from Windows.
+
+A phone's browser can also be a camera without the app: start the server with `--https` and open `camera.html` on the https address.
 
 ## 💾 Disk use
 

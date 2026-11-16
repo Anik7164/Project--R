@@ -1,0 +1,17 @@
+{
+  "name": "project-r-mobile",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Project R live Bengali football commentary: the iPhone app (the web app's pages in a Capacitor shell)",
+  "scripts": {
+    "www": "node build-www.mjs",
+    "ios": "node build-www.mjs && (test -d ios || cap add ios) && cap sync ios && node ios-settings.mjs"
+  },
+  "dependencies": {
+    "@capacitor/core": "^8.0.0",
+    "@capacitor/ios": "^8.0.0"
+  },
+  "devDependencies": {
+    "@capacitor/cli": "^8.0.0"
+  }
+}
