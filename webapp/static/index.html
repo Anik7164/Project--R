@@ -2,8 +2,17 @@
 <html lang="bn">
 <head>
 <meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <title>Project R · লাইভ ধারাভাষ্য</title>
+<!-- "Add to Home Screen" on a phone makes this page an app of its own. -->
+<link rel="manifest" href="/static/manifest.webmanifest">
+<meta name="theme-color" content="#0b1210">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="Project R">
+<link rel="apple-touch-icon" href="/static/icon-180.png">
+<link rel="icon" type="image/png" href="/static/icon-192.png">
 <link rel="stylesheet" href="/static/style.css">
 </head>
 <body>
@@ -15,7 +24,10 @@
       <p>Project R · live Bengali football commentary</p>
     </div>
   </div>
-  <div class="status" id="status"><span class="dot"></span><span id="statusText">Not connected</span></div>
+  <div class="top-right">
+    <button class="ghost server" id="serverName" hidden></button>
+    <div class="status" id="status"><span class="dot"></span><span id="statusText">Not connected</span></div>
+  </div>
 </header>
 
 <main class="layout">
@@ -27,7 +39,10 @@
     </div>
 
     <div class="stage" id="stage">
-      <canvas id="picture" width="960" height="540"></canvas>
+      <canvas id="picture" class="main" width="960" height="540"></canvas>
+      <canvas id="picture2" class="inset" width="640" height="360" hidden
+        title="Camera 2: click to make it the big picture" tabindex="0" role="button"
+        aria-label="Camera 2: make it the big picture"></canvas>
       <video id="finishedVideo" controls playsinline hidden></video>
       <div class="idle" id="idle">
         <p class="bn">ম্যাচ শুরুর অপেক্ষায়</p>
@@ -35,6 +50,7 @@
       </div>
       <button class="sound-on" id="soundOn" hidden>Turn sound on</button>
       <div class="badge" id="liveBadge" hidden><span></span><b id="liveText">LIVE</b><small id="lagText"></small></div>
+      <div class="hold" id="hold" role="status" hidden></div>
       <div class="caption" id="caption" hidden><p class="bn" id="captionText"></p></div>
     </div>
 
@@ -69,7 +85,40 @@
           <button role="tab" data-kind="file" aria-selected="false">Video</button>
         </div>
         <div class="tab" data-for="camera">
-          <label>Camera number <input type="number" id="cameraIndex" min="0" max="9" value="0"></label>
+          <label>How many cameras
+            <select id="cameraCount">
+              <option value="1">1 camera</option>
+              <option value="2">2 cameras</option>
+            </select>
+          </label>
+          <div class="cameras" id="cameras">
+            <div class="camera-slot" data-slot="1">
+              <h3>Camera 1 <small>the commentary comes from this one</small></h3>
+              <select class="device" aria-label="Device for camera 1"></select>
+              <input type="text" class="address" placeholder="rtsp://192.168.0.10:8554/match"
+                aria-label="Address of camera 1" hidden>
+              <div class="preview">
+                <button type="button" class="ghost look">Show its picture</button>
+                <img alt="Picture from camera 1" hidden>
+              </div>
+            </div>
+            <button type="button" id="swapCameras" hidden>⇄ Swap camera 1 and camera 2</button>
+            <div class="camera-slot" data-slot="2" hidden>
+              <h3>Camera 2 <small>shown beside camera 1</small></h3>
+              <select class="device" aria-label="Device for camera 2"></select>
+              <input type="text" class="address" placeholder="rtsp://192.168.0.11:8554/match"
+                aria-label="Address of camera 2" hidden>
+              <div class="preview">
+                <button type="button" class="ghost look">Show its picture</button>
+                <img alt="Picture from camera 2" hidden>
+              </div>
+            </div>
+          </div>
+          <div class="buttons">
+            <button type="button" class="ghost" id="refreshCameras">Look for cameras again</button>
+            <a class="button ghost" id="cameraPage" href="camera.html">Use this device as a camera</a>
+          </div>
+          <p class="hint">Choose the device for each camera yourself; "Show its picture" tells you which is which. A phone becomes a camera from its camera page (in the iPhone app, or in its browser when the server runs with --https) and then appears in these lists.</p>
           <label>Microphone (for whistle and crowd)
             <input type="text" id="mic" list="mics" placeholder="leave empty for no sound">
             <datalist id="mics"></datalist>
@@ -111,7 +160,16 @@
             </select>
           </label>
         </div>
+        <label>Say nothing unless the picture shows the ball or this many players together
+          <select id="needPlayers">
+            <option value="2" selected>2 players (normal)</option>
+            <option value="3">3 players</option>
+            <option value="5">5 players</option>
+            <option value="0">Off: speak whatever the camera shows</option>
+          </select>
+        </label>
         <label class="check"><input type="checkbox" id="boxes" checked> Draw players and ball on the picture</label>
+        <p class="hint share" id="share" hidden></p>
         <div class="actions">
           <button class="primary" id="start">Start</button>
           <button class="danger" id="stop" disabled>Stop</button>
@@ -168,12 +226,15 @@
       <h2>ধারাভাষ্য</h2>
       <span id="lineCount">0 lines</span>
     </div>
+    <p class="feed-note" id="feedNote" hidden>These lines are from the last match. It has ended: nothing is being said now.</p>
     <ol class="feed" id="feed" aria-live="polite"></ol>
     <p class="empty" id="feedEmpty">Lines appear here as the match is played.</p>
     <ul class="notes" id="notes"></ul>
   </aside>
 </main>
 
+<script src="/static/shell.js"></script>
+<script src="/static/common.js"></script>
 <script src="/static/app.js"></script>
 </body>
 </html>

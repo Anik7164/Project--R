@@ -12,7 +12,14 @@ With --host 0.0.0.0 the address printed with ?key=... is the operator's
 page (start/stop, kick-off, goal and card buttons); everybody else gets
 the plain address and can only watch and listen.
 
-Needs: pip install fastapi "uvicorn[standard]" python-multipart edge-tts
+    python webapp/server.py --host 0.0.0.0 --https
+
+--https is for a phone's browser that is to be a camera (its camera page
+only works over https there). The certificate is made on this PC, so the
+phone shows a warning the first time: choose to go on. The iPhone app
+(mobile/) and the desktop app (desktop/) need no https.
+
+Needs: pip install -r requirements-webapp.txt
 """
 
 import sys
@@ -32,7 +39,8 @@ from contextlib import asynccontextmanager  # noqa: E402
 import socket  # noqa: E402
 
 from fastapi import FastAPI, HTTPException, Request, UploadFile, WebSocket, WebSocketDisconnect  # noqa: E402
-from fastapi.responses import FileResponse, JSONResponse  # noqa: E402
+from fastapi.middleware.cors import CORSMiddleware  # noqa: E402
+from fastapi.responses import FileResponse, Response  # noqa: E402
 from fastapi.staticfiles import StaticFiles  # noqa: E402
 
 VIDEO_DIR = ROOT / "data" / "videos"
@@ -52,6 +60,11 @@ async def lifespan(_):
 
 
 app = FastAPI(title="Project R live commentary", lifespan=lifespan)
+# The iPhone app's page comes from the app itself, not from this server.
+app.add_middleware(
+    CORSMiddleware,
+    allow_origin_regex=r"^(capacitor|ionic|https?)://localhost(:\d+)?$",
+    allow_methods=["GET", "POST"], allow_headers=["X-Key", "Content-Type"])
 
 
 class Hub:
@@ -65,11 +78,13 @@ class Hub:
         self.loop = None
         self.match = None
         self.key = None    # operator key; None: anyone who can open the page
+        self.phones = {}   # id -> PushFeed: devices sending their camera in
+        self.share = None  # {"address", "key"}: what a phone on the Wi-Fi types to join
 
     def _deliver(self, item):
         for client in list(self.clients):
             if isinstance(item, bytes):
-                limit = self.FRAME_LIMIT if item[:1] == b"\x01" else self.SOUND_LIMIT
+                limit = self.SOUND_LIMIT if item[:1] == b"\x02" else self.FRAME_LIMIT
                 if client.qsize() >= limit:
                     continue
             elif client.qsize() >= 2000:
@@ -136,6 +151,97 @@ def list_microphones():
     return re.findall(r'"([^"@][^"]*)"\s*\(audio\)', listing)
 
 
+def camera_names():
+    """{camera number: name} of the cameras plugged into this PC, as far
+    as the system tells. The numbers are the ones OpenCV opens."""
+    import re
+    import subprocess
+
+    names = {}
+    try:
+        if sys.platform == "win32":
+            import audio_cues
+
+            ffmpeg = audio_cues.ffmpeg_path()
+            if ffmpeg is not None:
+                listing = subprocess.run(
+                    [ffmpeg, "-hide_banner", "-list_devices", "true", "-f", "dshow",
+                     "-i", "dummy"],
+                    capture_output=True, timeout=10).stderr.decode("utf-8", "replace")
+                # DirectShow lists them in the order OpenCV numbers them.
+                found = re.findall(r'"([^"@][^"]*)"\s*\(video\)', listing)
+                names = dict(enumerate(found))
+        elif sys.platform.startswith("linux"):
+            for node in sorted(Path("/sys/class/video4linux").glob("video*"),
+                               key=lambda n: int(n.name[5:])):
+                first = (node / "index").read_text().strip() == "0"   # not its metadata node
+                if first:
+                    names[int(node.name[5:])] = (node / "name").read_text().strip()
+    except (OSError, ValueError, subprocess.TimeoutExpired):
+        pass
+    return names
+
+
+def list_cameras():
+    """What can be chosen as camera 1 or camera 2."""
+    names = camera_names() or {number: "" for number in range(4)}
+    cameras = [{"id": f"camera:{number}",
+                "label": f"Camera {number}" + (f": {name}" if name else "")}
+               for number, name in sorted(names.items())]
+    cameras += [{"id": f"phone:{phone}", "label": f"Phone camera: {feed.name}"}
+                for phone, feed in hub.phones.items()]
+    return cameras
+
+
+def source_spec(source, live_only=False):
+    """What the page chose, checked, as the engine wants it."""
+    kind = (source or {}).get("kind")
+    if kind == "file" and not live_only:
+        return {"kind": "file", "path": in_folder(VIDEO_DIR, source.get("name", ""))}
+    if kind == "url":
+        url = (source.get("url") or "").strip()
+        if not url.lower().startswith(("rtsp://", "rtmp://", "http://", "https://", "udp://",
+                                       "srt://")):
+            raise HTTPException(400, "The stream address must start with rtsp://, rtmp://, "
+                                     "http://, https://, udp:// or srt://")
+        return {"kind": "url", "url": url}
+    if kind == "camera":
+        try:
+            number = int(source.get("index", 0))
+        except (TypeError, ValueError):
+            raise HTTPException(400, "The camera number must be a number.")
+        if not 0 <= number <= 63:
+            raise HTTPException(400, "The camera number must be between 0 and 63.")
+        name = camera_names().get(number)
+        return {"kind": "camera", "index": number,
+                "label": f"camera {number}" + (f" ({name})" if name else "")}
+    if kind == "phone":
+        feed = hub.phones.get(source.get("id"))
+        if feed is None:
+            raise HTTPException(400, "That phone camera is not connected any more. "
+                                     "Open its camera page again and choose it again.")
+        return {"kind": "phone", "feed": feed, "id": source.get("id"),
+                "label": f"phone camera {feed.name}"}
+    raise HTTPException(400, "Choose a camera, a stream or a video.")
+
+
+def same_device(one, other):
+    if one["kind"] != other["kind"]:
+        return False
+    return {"camera": one.get("index") == other.get("index"),
+            "url": one.get("url") == other.get("url"),
+            "phone": one.get("feed") is other.get("feed")}.get(one["kind"], False)
+
+
+def in_use(spec):
+    """Is the running match reading this camera?"""
+    match = hub.match
+    if match is None or match.state not in ("starting", "running"):
+        return False
+    return any(used is not None and same_device(spec, used)
+               for used in (match.spec, match.second_spec))
+
+
 
 
 @app.get("/api/state")
@@ -150,6 +256,8 @@ def state(request: Request):
         "match": hub.match.hello() if hub.match else None,
         "videos": list_videos() if operator else [],
         "mics": list_microphones() if operator else [],
+        "cameras": list_cameras() if operator else [],
+        "share": hub.share if operator else None,
         "colours": BENGALI_COLOUR_NAMES,
         "defaults": DEFAULTS,
     }
@@ -181,27 +289,64 @@ async def start(request: Request):
     from live_engine import LiveMatch
 
     body = await request.json()
-    source = body.get("source") or {}
-    kind = source.get("kind")
-    if kind == "file":
-        spec = {"kind": "file", "path": in_folder(VIDEO_DIR, source.get("name", ""))}
-    elif kind == "url":
-        url = (source.get("url") or "").strip()
-        if not url.lower().startswith(("rtsp://", "rtmp://", "http://", "https://", "udp://",
-                                       "srt://")):
-            raise HTTPException(400, "The stream address must start with rtsp://, rtmp://, "
-                                     "http://, https://, udp:// or srt://")
-        spec = {"kind": "url", "url": url}
-    elif kind == "camera":
-        spec = {"kind": "camera", "index": int(source.get("index", 0))}
-    else:
-        raise HTTPException(400, "Choose a camera, a stream or a video.")
+    spec = source_spec(body.get("source"))
+    second = None
+    if body.get("second"):
+        # Camera 2 is shown beside camera 1; which device is which is the
+        # operator's choice on the page.
+        second = source_spec(body["second"], live_only=True)
+        if same_device(spec, second):
+            raise HTTPException(400, "Camera 1 and camera 2 are the same device. "
+                                     "Choose two different ones.")
     if hub.match is not None and hub.match.state in ("starting", "running"):
         raise HTTPException(409, "A match is already running. Stop it first.")
-    hub.match = LiveMatch(spec, body.get("settings"), hub.publish, hub.publish)
+    hub.match = LiveMatch(spec, body.get("settings"), hub.publish, hub.publish, second=second)
     hub.match.start()
     hub.publish(hub.match.hello())
     return {"session": hub.match.id}
+
+
+@app.get("/api/cameras")
+def cameras(request: Request):
+    need_operator(request)
+    return {"cameras": list_cameras()}
+
+
+@app.post("/api/camera/preview")
+def camera_preview(request: Request, source: dict):
+    """One picture from a camera, so the operator sees which device is
+    which before deciding camera 1 and camera 2."""
+    need_operator(request)
+    import cv2
+
+    from live_engine import FrameSource
+
+    spec = source_spec(source, live_only=True)
+    if in_use(spec):
+        raise HTTPException(409, "The running match is using this camera.")
+    reader = FrameSource(spec, 5.0)
+    try:
+        capture = reader._open()
+    except RuntimeError as error:
+        raise HTTPException(400, str(error))
+    try:
+        frame = None
+        for _ in range(12):            # the first pictures of a webcam are dark
+            ok, picture = capture.read()
+            if ok and picture is not None:
+                frame = picture
+            elif frame is not None:
+                break
+    finally:
+        capture.release()
+    if frame is None:
+        raise HTTPException(400, f"{reader.describe()} opened but sent no picture.")
+    scale = min(1.0, 480 / frame.shape[1])
+    if scale < 1.0:
+        frame = cv2.resize(frame, None, fx=scale, fy=scale, interpolation=cv2.INTER_AREA)
+    ok, jpeg = cv2.imencode(".jpg", frame, [cv2.IMWRITE_JPEG_QUALITY, 75])
+    return Response(jpeg.tobytes(), media_type="image/jpeg",
+                    headers={"Cache-Control": "no-store"})
 
 
 @app.post("/api/stop")
@@ -282,9 +427,48 @@ async def feed(socket_: WebSocket):
         hub.clients.discard(client)
 
 
+@app.websocket("/ws/camera")
+async def camera_in(socket_: WebSocket):
+    """A phone (or laptop) sending its camera: JPEG pictures in, one after
+    another. It then shows in the camera lists as "Phone camera: name"."""
+    await socket_.accept()
+    if hub.key and not secrets.compare_digest(socket_.query_params.get("key", ""), hub.key):
+        await socket_.close(code=4403, reason="operator key needed")
+        return
+    from live_engine import PushFeed
+
+    wanted = (socket_.query_params.get("name") or "phone").strip()[:40] or "phone"
+    name, number = wanted, 2
+    while any(feed.name == name for feed in hub.phones.values()):
+        name, number = f"{wanted} {number}", number + 1
+    phone, feed = secrets.token_hex(4), PushFeed(name)
+    hub.phones[phone] = feed
+    hub.publish({"type": "cameras"})
+    try:
+        await socket_.send_text(json.dumps({"id": phone, "name": name}))
+        while True:
+            message = await socket_.receive()
+            if message["type"] == "websocket.disconnect":
+                break
+            data = message.get("bytes")
+            if data and len(data) <= 4_000_000:
+                feed.push(data)
+    except (WebSocketDisconnect, RuntimeError):
+        pass
+    finally:
+        feed.close()
+        hub.phones.pop(phone, None)
+        hub.publish({"type": "cameras"})
+
+
 @app.get("/")
 def page():
     return FileResponse(STATIC / "index.html", headers={"Cache-Control": "no-store"})
+
+
+@app.get("/camera.html")
+def camera_page():
+    return FileResponse(STATIC / "camera.html", headers={"Cache-Control": "no-store"})
 
 
 app.mount("/static", StaticFiles(directory=STATIC), name="static")
@@ -299,6 +483,83 @@ def lan_address():
         return "this-pc"
 
 
+def operator_key():
+    """The same key every time the server starts, so a phone that was
+    given the operator address once keeps working. Kept in .cache."""
+    path = ROOT / ".cache" / "webapp-operator-key.txt"
+    try:
+        key = path.read_text(encoding="utf-8").strip()
+        if key:
+            return key
+    except OSError:
+        pass
+    key = secrets.token_urlsafe(6)
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(key, encoding="utf-8")
+    except OSError:
+        pass
+    return key
+
+
+def certificate(address, folder=None):
+    """(certificate file, key file) for https on this PC's own address,
+    made here once and kept in .cache."""
+    import datetime
+    import ipaddress
+
+    from cryptography import x509
+    from cryptography.hazmat.primitives import hashes, serialization
+    from cryptography.hazmat.primitives.asymmetric import rsa
+    from cryptography.x509.oid import NameOID
+
+    folder = folder or ROOT / ".cache" / "webapp-https"
+    cert_file, key_file, made_for = folder / "cert.pem", folder / "key.pem", folder / "address.txt"
+    try:
+        if cert_file.exists() and key_file.exists() and made_for.read_text().strip() == address:
+            return cert_file, key_file
+    except OSError:
+        pass
+    folder.mkdir(parents=True, exist_ok=True)
+    key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
+    name = x509.Name([x509.NameAttribute(NameOID.COMMON_NAME, "Project R live commentary")])
+    names = [x509.DNSName("localhost"), x509.IPAddress(ipaddress.ip_address("127.0.0.1"))]
+    try:
+        names.append(x509.IPAddress(ipaddress.ip_address(address)))
+    except ValueError:
+        names.append(x509.DNSName(address))
+    now = datetime.datetime.now(datetime.timezone.utc)
+    cert = (x509.CertificateBuilder().subject_name(name).issuer_name(name)
+            .public_key(key.public_key()).serial_number(x509.random_serial_number())
+            .not_valid_before(now - datetime.timedelta(days=1))
+            .not_valid_after(now + datetime.timedelta(days=800))
+            .add_extension(x509.SubjectAlternativeName(names), critical=False)
+            .add_extension(x509.BasicConstraints(ca=False, path_length=None), critical=True)
+            .sign(key, hashes.SHA256()))
+    cert_file.write_bytes(cert.public_bytes(serialization.Encoding.PEM))
+    key_file.write_bytes(key.private_bytes(
+        serialization.Encoding.PEM, serialization.PrivateFormat.TraditionalOpenSSL,
+        serialization.NoEncryption()))
+    made_for.write_text(address)
+    return cert_file, key_file
+
+
+def exit_with(pid):
+    """The desktop app started this server: when its window is gone (even
+    if it was killed), the camera and the GPU are let go."""
+    import os
+    import time
+
+    import psutil
+
+    while psutil.pid_exists(pid):
+        time.sleep(2)
+    if hub.match is not None:
+        hub.match.stop()
+        time.sleep(1)                   # the session is saved
+    os._exit(0)
+
+
 def main():
     import uvicorn
 
@@ -306,17 +567,41 @@ def main():
     parser.add_argument("--host", default="127.0.0.1",
                         help="0.0.0.0 lets other devices on the network watch")
     parser.add_argument("--port", type=int, default=8000)
+    parser.add_argument("--exit-with", type=int, metavar="PID",
+                        help="stop when this process is gone (the desktop app's window)")
+    parser.add_argument("--https", action="store_true",
+                        help="for a phone browser that is to be a camera "
+                             "(needs: pip install cryptography)")
     args = parser.parse_args()
 
     local = args.host in ("127.0.0.1", "localhost", "::1")
+    scheme, secure = ("https", {}) if args.https else ("http", {})
+    address = "127.0.0.1" if local else lan_address()
+    if args.https:
+        try:
+            cert_file, key_file = certificate(address)
+        except ImportError:
+            sys.exit("--https needs:  pip install cryptography")
+        secure = {"ssl_certfile": str(cert_file), "ssl_keyfile": str(key_file)}
     if local:
-        print(f"\nOpen  http://127.0.0.1:{args.port}\n")
+        print(f"\nOpen  {scheme}://127.0.0.1:{args.port}\n")
     else:
-        hub.key = secrets.token_urlsafe(6)
-        address = lan_address()
-        print(f"\nOperator (you):  http://127.0.0.1:{args.port}/?key={hub.key}")
-        print(f"Viewers:         http://{address}:{args.port}\n")
-    uvicorn.run(app, host=args.host, port=args.port, log_level="warning")
+        hub.key = operator_key()
+        hub.share = {"address": f"{address}:{args.port}", "key": hub.key,
+                     "url": f"{scheme}://{address}:{args.port}"}
+        print(f"\nOperator (you):      {scheme}://127.0.0.1:{args.port}/?key={hub.key}")
+        print(f"Operator on a phone: {scheme}://{address}:{args.port}/?key={hub.key}")
+        print(f"Viewers:             {scheme}://{address}:{args.port}")
+        if args.https:
+            print("The iPhone app cannot use this https server (its certificate is home-made): "
+                  "for the app, start without --https.\n")
+        else:
+            print(f"In the iPhone app:   address {address}:{args.port}   key {hub.key}\n")
+    if args.exit_with:
+        import threading
+
+        threading.Thread(target=exit_with, args=(args.exit_with,), daemon=True).start()
+    uvicorn.run(app, host=args.host, port=args.port, log_level="warning", **secure)
 
 
 if __name__ == "__main__":

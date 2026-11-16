@@ -58,6 +58,10 @@ def _match(**settings):
     match = LiveMatch({"kind": "camera", "index": 0}, {"voice": "off", **settings},
                       said.append, lambda data: None)
     match.frames_done = 1
+    # A match is in the picture (six people), and it is not a wall-clock camera.
+    match.watch.live = False
+    for _ in range(3):
+        match.watch.frame(0.0, None, 6)
     return match, said
 
 
@@ -248,3 +252,239 @@ def test_shootout_kick_is_said_after_the_wait_ends_not_during_it():
     assert kinds == ["shootout_start", "shootout_kick"]
     assert 38.0 <= _lines(said)[-1]["time"] <= 42.0
     assert match.phase() == "shootout"
+
+
+# ----------------------------------------------------------------------
+# Nothing is said unless a match is in the picture
+# ----------------------------------------------------------------------
+
+def _noise(seed, size=(90, 160)):
+    return np.random.default_rng(seed).integers(0, 255, (*size, 3), dtype=np.uint8)
+
+
+def test_picture_watch_tells_why_there_is_no_match_to_talk_about():
+    from live_engine import PictureWatch
+
+    watch = PictureWatch(need=2, live=True)
+    assert watch.state(wall=0.0) == "none"                 # no frame yet
+
+    for i in range(30):                                    # 3 s of black: a covered lens
+        watch.frame(i / 10, np.zeros((90, 160, 3), np.uint8), 4, wall=i / 10)
+    assert watch.state(wall=3.0) == "blank"
+
+    watch = PictureWatch(need=2, live=True)
+    still = _noise(0)
+    for i in range(70):                                    # 7 s of the very same picture
+        watch.frame(i / 10, still, 4, wall=i / 10)
+    assert watch.state(wall=7.0) == "frozen"
+
+    watch = PictureWatch(need=2, live=True)
+    for i in range(300):                                   # a desk: one person, no ball
+        watch.frame(i / 10, _noise(i), 1, wall=i / 10)
+    assert watch.state(wall=30.0) == "empty"
+    for i in range(300, 303):                              # the ball comes into view
+        watch.frame(i / 10, _noise(i), 1, wall=i / 10, ball=True)
+    assert watch.state(wall=30.3) == "ok"
+    assert watch.state(wall=40.0) == "none"                # the camera went quiet
+
+    watch = PictureWatch(need=2, live=False)               # a video: no wall clock
+    for i in range(3):
+        watch.frame(i / 10, _noise(i), 2)
+    assert watch.state(wall=1e9) == "ok"
+    assert PictureWatch(need=0, live=False).state() == "none"
+
+
+def _no_match_in_view(match, first, last):
+    """The camera shows a wall from `first` to `last` seconds."""
+    for i in range(int(first * 5), int(last * 5)):
+        match.watch.frame(i / 5, _noise(i), 0)
+
+
+def test_no_line_at_all_while_the_camera_shows_no_match():
+    match, said = _match()
+    _no_match_in_view(match, 0, 60)
+    for now in (30.0, 45.0, 60.0):          # silences that would get a filler line
+        match.clock = now
+        match._tick()
+    assert not _lines(said) and match.phase() == "hold"
+    stats = [m for m in said if m["type"] == "stats"][-1]
+    assert stats["picture"] == "empty"
+
+    # A roar heard while nothing was in the picture is not said later either.
+    class Sound:
+        samples, error = 1, None
+
+        def cues(self, until):
+            return [c for c in [{"time": 50.0, "type": "crowd_roar", "strength": 5.0,
+                                 "duration": 2.0}] if c["time"] <= until]
+
+    match.sound = Sound()
+    for i in range(3):                       # the match comes into view at 1:01
+        match.watch.frame(61.0 + i / 5, _noise(1000 + i), 6)
+    match.clock = 62.0
+    match._tick()
+    assert match.picture == "ok" and not _lines(said)
+    match.clock = 75.0
+    match._tick()                            # play goes on: the filler is back
+    assert [l["type"] for l in _lines(said)] == ["filler"]
+
+
+def test_before_the_first_picture_nothing_is_said_and_the_buttons_refuse():
+    said = []
+    match = LiveMatch({"kind": "camera", "index": 0}, {"voice": "off"}, said.append,
+                      lambda data: None)
+    match.clock = 30.0
+    match._tick()                            # the camera has not sent a picture
+    assert not _lines(said) and match.picture == "none"
+    with pytest.raises(ValueError, match="No picture"):
+        match.operator("kickoff")
+    match.operator("pause")                  # says nothing: allowed
+    assert not _lines(said)
+
+
+def test_stop_drops_the_lines_that_were_still_waiting():
+    match, said = _match()
+
+    class Voice:
+        dropped = False
+
+        def backlog(self):
+            return 0
+
+        def say(self, line):
+            pass
+
+        def drop(self):
+            self.dropped = True
+
+    match.speaker = Voice()
+    match.stop()
+    match.clock = 45.0
+    match._tick()                            # a look that was already on its way
+    assert not _lines(said) and match.speaker.dropped
+    assert match.stats()["cut"]
+
+
+def test_a_phone_sends_pictures_in_and_they_come_out_as_a_camera():
+    import time
+
+    import cv2
+
+    from live_engine import PushFeed
+
+    feed = PushFeed("pitch side")
+    source = FrameSource({"kind": "phone", "feed": feed}, process_fps=50.0)
+    assert source.live and source.describe() == "phone camera pitch side"
+    source.start()
+    got = []
+    for i in range(4):
+        ok, jpeg = cv2.imencode(".jpg", np.full((48, 64, 3), 40 + 50 * i, dtype=np.uint8))
+        feed.push(jpeg.tobytes())
+        item = source.get(timeout=2.0)
+        assert item is not None
+        time.sleep(0.05)                    # the camera's next picture, not the same instant
+        got.append(int(item[1].mean()))
+    source.stopping.set()
+    assert [round(value, -1) for value in got] == [40, 90, 140, 190]
+    assert source.last_wall is not None
+
+
+def test_two_cameras_are_chosen_by_hand_and_a_phone_can_be_one(tmp_path, monkeypatch):
+    import cv2
+    from fastapi.testclient import TestClient
+
+    import server
+
+    monkeypatch.setattr(server, "VIDEO_DIR", tmp_path)
+    monkeypatch.setattr(server, "camera_names", lambda: {0: "Laptop camera", 1: "USB camera"})
+    started = []
+
+    class FakeMatch:
+        state, id, spec, second_spec = "running", "x", None, None
+
+        def __init__(self, spec, settings, publish_json, publish_bytes, second=None):
+            self.spec, self.second_spec = spec, second
+            started.append((spec, second))
+
+        def start(self):
+            pass
+
+        def stop(self):
+            self.state = "ended"
+
+        def hello(self):
+            return {"type": "hello", "stats": {}, "lines": [], "notes": []}
+
+    monkeypatch.setattr(live_engine, "LiveMatch", FakeMatch)
+    with TestClient(server.app) as client:
+        monkeypatch.setattr(server.hub, "match", None)
+        labels = [c["label"] for c in client.get("/api/cameras").json()["cameras"]]
+        assert labels == ["Camera 0: Laptop camera", "Camera 1: USB camera"]
+
+        # The same device cannot be camera 1 and camera 2.
+        same = client.post("/api/start", json={"source": {"kind": "camera", "index": 1},
+                                               "second": {"kind": "camera", "index": 1}})
+        assert same.status_code == 400 and "same device" in same.json()["detail"]
+        assert client.post("/api/start", json={"source": {"kind": "camera", "index": 0},
+                                               "second": {"kind": "file", "name": "x.mp4"}}
+                           ).status_code == 400
+
+        # Camera 1 is what the operator says it is: here the USB camera, not number 0.
+        assert client.post("/api/start", json={"source": {"kind": "camera", "index": 1},
+                                               "second": {"kind": "camera", "index": 0}}
+                           ).status_code == 200
+        spec, second = started[-1]
+        assert (spec["index"], second["index"]) == (1, 0)
+        assert spec["label"] == "camera 1 (USB camera)"
+        # ... and the running match's cameras are not opened a second time for a look.
+        assert client.post("/api/camera/preview", json={"kind": "camera", "index": 0}
+                           ).status_code == 409
+        client.post("/api/stop")
+
+        # A phone that sends its camera shows in the lists and can be either camera.
+        with client.websocket_connect("/ws/camera?name=Pitch%20side") as phone:
+            told = phone.receive_json()
+            assert told["name"] == "Pitch side"
+            ok, jpeg = cv2.imencode(".jpg", np.full((90, 160, 3), 120, dtype=np.uint8))
+            phone.send_bytes(jpeg.tobytes())
+            cameras = client.get("/api/cameras").json()["cameras"]
+            assert cameras[-1] == {"id": f"phone:{told['id']}", "label": "Phone camera: Pitch side"}
+            look = client.post("/api/camera/preview", json={"kind": "phone", "id": told["id"]})
+            assert look.status_code == 200 and look.headers["content-type"] == "image/jpeg"
+            assert client.post("/api/start", json={
+                "source": {"kind": "phone", "id": told["id"]},
+                "second": {"kind": "camera", "index": 0}}).status_code == 200
+            assert started[-1][0]["feed"].name == "Pitch side"
+            client.post("/api/stop")
+        gone = client.post("/api/start", json={"source": {"kind": "phone", "id": told["id"]}})
+        assert gone.status_code == 400 and "not connected" in gone.json()["detail"]
+
+        # Only the operator may add a camera.
+        monkeypatch.setattr(server.hub, "key", "secret")
+        assert client.get("/api/cameras").status_code == 403
+        from starlette.websockets import WebSocketDisconnect
+
+        with pytest.raises(WebSocketDisconnect) as refused:
+            with client.websocket_connect("/ws/camera?name=x") as phone:
+                phone.receive_json()
+        assert refused.value.code == 4403
+        # The iPhone app's pages come from the app, so the server must let them in.
+        allowed = client.get("/api/state", headers={"Origin": "capacitor://localhost"})
+        assert allowed.headers["access-control-allow-origin"] == "capacitor://localhost"
+        assert "access-control-allow-origin" not in client.get(
+            "/api/state", headers={"Origin": "https://example.com"}).headers
+        assert client.get("/camera.html").status_code == 200
+
+
+def test_https_certificate_is_made_once_for_this_pc(tmp_path):
+    pytest.importorskip("cryptography")
+    import ssl
+
+    import server
+
+    cert, key = server.certificate("192.168.0.5", tmp_path)
+    context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+    context.load_cert_chain(cert, key)       # a pair the server can really use
+    first = cert.read_bytes()
+    assert server.certificate("192.168.0.5", tmp_path)[0].read_bytes() == first
+    assert server.certificate("192.168.0.9", tmp_path)[0].read_bytes() != first

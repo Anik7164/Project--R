@@ -2,13 +2,14 @@
 //
 // The server sends, over one WebSocket:
 //   text   {type: hello|status|stats|line|audio|note}
-//   bytes  1 byte kind (1 picture JPEG, 2 match sound s16le 16 kHz mono),
-//          8 bytes little-endian seconds into the match feed, then the data
+//   bytes  1 byte kind (1 picture JPEG, 2 match sound s16le 16 kHz mono,
+//          3 picture of camera 2), 8 bytes little-endian seconds into the
+//          match feed, then the data
 // The picture is shown `delay` seconds late; a line is shown and spoken
 // when the delayed picture reaches the moment the line is about.
+// (SERVER, key, api() and friends: common.js.)
 
 const $ = (id) => document.getElementById(id);
-const key = new URLSearchParams(location.search).get("key") || "";
 
 const COLOUR_CSS = {
   red: "#e23b3b", orange: "#ff8c1a", yellow: "#ffd426", green: "#3aa655",
@@ -43,22 +44,6 @@ let sessionId = null;
 
 // ---------------------------------------------------------------- server
 
-async function api(path, body, raw) {
-  const options = { headers: { "X-Key": key } };
-  if (raw) {
-    options.method = "POST";
-    options.body = raw;
-  } else if (body !== undefined) {
-    options.method = "POST";
-    options.headers["Content-Type"] = "application/json";
-    options.body = JSON.stringify(body);
-  }
-  const response = await fetch(path, options);
-  const data = await response.json().catch(() => ({}));
-  if (!response.ok) throw new Error(data.detail || response.statusText);
-  return data;
-}
-
 function showError(error) {
   $("error").textContent = error ? (error.message || String(error)) : "";
 }
@@ -68,6 +53,7 @@ function showError(error) {
 let delay = Number(localStorage.getItem("delay") ?? 10);
 let base = null;            // performance seconds at match second 0, delay included
 let frames = [];            // {t, blob}, oldest first
+let frames2 = [];           // camera 2, the same
 let newest = 0;
 let drawn = -1;
 const nowSeconds = () => performance.now() / 1000;
@@ -96,6 +82,47 @@ function onPicture(t, blob) {
   $("idle").hidden = true;
 }
 
+// Camera 2 is the small picture in the corner; a click makes it the big one.
+const canvas2 = $("picture2");
+const context2 = canvas2.getContext("2d");
+
+function onPicture2(t, blob) {
+  if (base === null) return;          // camera 1 sets the clock
+  frames2.push({ t, blob });
+  if (frames2.length > 600) frames2.splice(0, frames2.length - 600);
+}
+
+function swapPictures() {
+  const second = canvas2.classList.contains("main");
+  canvas2.className = second ? "inset" : "main";
+  canvas.className = second ? "main" : "inset";
+  const small = second ? canvas2 : canvas;
+  const large = second ? canvas : canvas2;
+  small.title = `Camera ${second ? 2 : 1}: click to make it the big picture`;
+  small.setAttribute("role", "button");
+  small.tabIndex = 0;
+  large.removeAttribute("title");
+  large.removeAttribute("role");
+  large.removeAttribute("tabindex");
+}
+
+function showSecond(show) {
+  if (!show && canvas2.classList.contains("main")) swapPictures();
+  canvas2.hidden = !show;
+  if (!show) frames2 = [];
+}
+
+function draw(target, targetContext, blob) {
+  createImageBitmap(blob).then((image) => {
+    if (target.width !== image.width || target.height !== image.height) {
+      target.width = image.width;
+      target.height = image.height;
+    }
+    targetContext.drawImage(image, 0, 0);
+    image.close();
+  }).catch(() => {});
+}
+
 function render() {
   requestAnimationFrame(render);
   const at = playhead();
@@ -104,14 +131,13 @@ function render() {
   while (frames.length && frames[0].t <= at) pick = frames.shift();
   if (pick && pick.t !== drawn) {
     drawn = pick.t;
-    createImageBitmap(pick.blob).then((image) => {
-      if (canvas.width !== image.width || canvas.height !== image.height) {
-        canvas.width = image.width;
-        canvas.height = image.height;
-      }
-      context.drawImage(image, 0, 0);
-      image.close();
-    }).catch(() => {});
+    draw(canvas, context, pick.blob);
+  }
+  let pick2 = null;
+  while (frames2.length && frames2[0].t <= at) pick2 = frames2.shift();
+  if (pick2) {
+    draw(canvas2, context2, pick2.blob);
+    if (canvas2.hidden) showSecond(true);
   }
   releaseLines(at);
 }
@@ -236,7 +262,7 @@ function speakNext() {
     }
     speech.shift();
     const entry = byId.get(next.line.id);
-    const player = new Audio(next.line.audio);
+    const player = new Audio(serverUrl(next.line.audio));
     player.volume = $("voiceVolume").value / 100;
     speaking = player;
     const done = () => {
@@ -262,13 +288,46 @@ function kit(element, colour) {
   element.style.background = COLOUR_CSS[colour] || "";
 }
 
+// The operator pressed Stop, or the camera broke: what this page was still
+// holding back (the picture runs `delay` seconds late) is dropped, so
+// nothing more is shown or said once there is no match feed.
+function cutNow() {
+  frames = [];
+  frames2 = [];
+  base = null;
+  audioBase = null;
+  waiting.length = 0;
+  speech.length = 0;
+  if (speaking) {
+    const player = speaking;
+    speaking = null;
+    player.pause();
+  }
+  document.querySelectorAll("#feed .speaking").forEach((item) => item.classList.remove("speaking"));
+  clearTimeout(captionTimer);
+  $("caption").hidden = true;
+  context.clearRect(0, 0, canvas.width, canvas.height);
+  showSecond(false);
+  $("idle").hidden = false;
+}
+
 function onStats(next) {
+  const before = stats;
   stats = next;
   if (next.session !== sessionId) newSession(next.session);
   const state = next.state;
   $("status").className = `status ${state}`;
   $("statusText").textContent = next.message;
   const running = state === "running" || state === "starting";
+  if (running) $("feedNote").hidden = true;
+  if (!running && next.cut && !(before && before.session === next.session && before.cut && before.state === state)) {
+    cutNow();
+    $("idleText").textContent = state === "failed" ? next.message : "Stopped. Nothing is being said.";
+  }
+  // Why nothing is said just now: no picture, a black one, nobody in view.
+  $("hold").hidden = !next.hold;
+  $("hold").textContent = next.hold || "";
+  if (!next.second) showSecond(false);
   $("liveBadge").hidden = state !== "running";
   $("liveText").textContent = next.live_source ? "LIVE" : "PLAYING AS LIVE";
   $("lagText").textContent = delay ? `${delay} s behind` : "";
@@ -293,7 +352,7 @@ function onStats(next) {
   $("minute").textContent = state === "starting" ? "–" : bn(next.minute) + "'";
   $("phase").textContent = {
     play: "in play", before: "before kick-off", break: "break",
-    shootout: "shootout", full_time: "full time",
+    shootout: "shootout", full_time: "full time", hold: "on hold",
   }[next.phase] || next.phase;
 
   $("tRate").textContent = next.rate ? next.rate.toFixed(1) : "–";
@@ -308,6 +367,8 @@ function onStats(next) {
 function newSession(id) {
   sessionId = id;
   frames = [];
+  showSecond(false);
+  $("feedNote").hidden = true;
   base = null;
   audioBase = null;
   waiting.length = 0;
@@ -336,7 +397,7 @@ function onStatus(message) {
 // ---------------------------------------------------------------- socket
 
 function connect() {
-  const socket = new WebSocket(`${location.protocol === "https:" ? "wss" : "ws"}://${location.host}/ws`);
+  const socket = new WebSocket(socketUrl("/ws"));
   socket.binaryType = "arraybuffer";
   socket.onmessage = (event) => {
     if (typeof event.data !== "string") {
@@ -345,6 +406,7 @@ function connect() {
       const t = view.getFloat64(1, true);
       if (kind === 1) onPicture(t, new Blob([new Uint8Array(event.data, 9)], { type: "image/jpeg" }));
       else if (kind === 2) onMatchSound(t, event.data.slice(9));
+      else if (kind === 3) onPicture2(t, new Blob([new Uint8Array(event.data, 9)], { type: "image/jpeg" }));
       return;
     }
     const message = JSON.parse(event.data);
@@ -352,6 +414,11 @@ function connect() {
       onStats(message.stats);
       message.lines.forEach((line) => onLine(line, true));
       message.notes.forEach(onNote);
+      // Lines of a match that is over are history, not commentary.
+      const over = message.stats.state !== "running" && message.stats.state !== "starting";
+      $("feedNote").hidden = !(over && message.lines.length);
+    } else if (message.type === "cameras") {
+      if (operator) loadCameras();
     } else if (message.type === "stats") onStats(message);
     else if (message.type === "line") onLine(message.line, false);
     else if (message.type === "audio") onVoice(message.id, message.url);
@@ -378,7 +445,7 @@ async function playFinished() {
     finishedLines = data.lines.map((line, i) => ({ ...line, id: `f${i}`, source: "", delay: 0 }));
     finishedShown = 0;
     const video = $("finishedVideo");
-    video.src = data.video;
+    video.src = serverUrl(data.video);
     video.hidden = false;
     canvas.hidden = true;
     $("idle").hidden = true;
@@ -460,10 +527,152 @@ function seconds(text) {
   return parts.length === 2 ? parts[0] * 60 + parts[1] : parts[0] || 0;
 }
 
+// ---- cameras: which device is camera 1, which is camera 2
+
+const slots = [...document.querySelectorAll(".camera-slot")];   // camera 1, camera 2
+const ADDRESS = "address";            // "a network camera: type its address"
+let cameraList = [];
+const chosen = (() => {
+  try { return JSON.parse(remembered("cameras")) || {}; } catch { return {}; }
+})();                                 // {count, 1: {device, address}, 2: {...}}
+
+const slotParts = (slot) => ({
+  device: slot.querySelector(".device"),
+  address: slot.querySelector(".address"),
+  image: slot.querySelector("img"),
+});
+
+function saveCameras() {
+  slots.forEach((slot) => {
+    const { device, address } = slotParts(slot);
+    chosen[slot.dataset.slot] = { device: device.value, address: address.value };
+  });
+  chosen.count = Number($("cameraCount").value);
+  remember("cameras", JSON.stringify(chosen));
+}
+
+function fillCameras(list) {
+  cameraList = list;
+  const taken = new Set();
+  slots.forEach((slot) => {
+    const { device, address } = slotParts(slot);
+    const wanted = device.value || chosen[slot.dataset.slot]?.device;
+    device.replaceChildren(...list.map((camera) => {
+      const option = document.createElement("option");
+      option.value = camera.id;
+      option.textContent = camera.label;
+      return option;
+    }));
+    const other = document.createElement("option");
+    other.value = ADDRESS;
+    other.textContent = "A network camera (type its address)";
+    device.append(other);
+    const values = [...device.options].map((option) => option.value);
+    // Keep what was chosen; otherwise the first device the other camera does not have.
+    device.value = values.includes(wanted) && (wanted === ADDRESS || !taken.has(wanted))
+      ? wanted : (values.find((value) => value !== ADDRESS && !taken.has(value)) || ADDRESS);
+    taken.add(device.value);
+    device.dataset.was = device.value;
+    if (!address.value) address.value = chosen[slot.dataset.slot]?.address || "";
+    address.hidden = device.value !== ADDRESS;
+  });
+}
+
+async function loadCameras() {
+  try { fillCameras((await api("/api/cameras")).cameras); } catch (error) { showError(error); }
+}
+
+function clearPreview(slot) {
+  const { image } = slotParts(slot);
+  if (image.src) URL.revokeObjectURL(image.src);
+  image.removeAttribute("src");
+  image.hidden = true;
+}
+
+function onDeviceChosen(slot) {
+  const mine = slotParts(slot);
+  const otherSlot = slots.find((candidate) => candidate !== slot);
+  const theirs = slotParts(otherSlot);
+  // Choosing the other camera's device hands that camera this one's: a swap.
+  if (mine.device.value !== ADDRESS && mine.device.value === theirs.device.value) {
+    theirs.device.value = mine.device.dataset.was;
+    theirs.device.dataset.was = theirs.device.value;
+    theirs.address.hidden = theirs.device.value !== ADDRESS;
+    clearPreview(otherSlot);
+  }
+  mine.device.dataset.was = mine.device.value;
+  mine.address.hidden = mine.device.value !== ADDRESS;
+  clearPreview(slot);
+  saveCameras();
+}
+
+function swapCameras() {
+  const [one, two] = slots.map(slotParts);
+  [one.device.value, two.device.value] = [two.device.value, one.device.value];
+  [one.address.value, two.address.value] = [two.address.value, one.address.value];
+  slots.forEach((slot) => {
+    const { device, address } = slotParts(slot);
+    device.dataset.was = device.value;
+    address.hidden = device.value !== ADDRESS;
+    clearPreview(slot);
+  });
+  saveCameras();
+}
+
+function setCameraCount(count) {
+  $("cameraCount").value = String(count);
+  slots[1].hidden = count < 2;
+  $("swapCameras").hidden = count < 2;
+  if (count >= 2) {
+    // Two cameras cannot be the same device.
+    const [one, two] = slots.map(slotParts);
+    if (two.device.value !== ADDRESS && two.device.value === one.device.value) {
+      const free = [...two.device.options].map((option) => option.value)
+        .find((value) => value !== ADDRESS && value !== one.device.value);
+      two.device.value = free || ADDRESS;
+      two.device.dataset.was = two.device.value;
+      two.address.hidden = two.device.value !== ADDRESS;
+    }
+  }
+}
+
+function cameraSource(slot) {
+  const { device, address } = slotParts(slot);
+  const value = device.value;
+  if (value === ADDRESS) return { kind: "url", url: address.value };
+  const [kind, id] = [value.slice(0, value.indexOf(":")), value.slice(value.indexOf(":") + 1)];
+  return kind === "phone" ? { kind, id } : { kind: "camera", index: Number(id) };
+}
+
+async function lookAtCamera(slot) {
+  showError();
+  const { image } = slotParts(slot);
+  const button = slot.querySelector(".look");
+  button.disabled = true;
+  button.textContent = "Opening the camera…";
+  try {
+    const picture = await api("/api/camera/preview", cameraSource(slot));
+    clearPreview(slot);
+    image.src = URL.createObjectURL(picture);
+    image.hidden = false;
+  } catch (error) {
+    clearPreview(slot);
+    showError(error);
+  } finally {
+    button.disabled = false;
+    button.textContent = "Show its picture";
+  }
+}
+
 async function start() {
   showError();
   const source = { kind: sourceKind };
-  if (sourceKind === "camera") source.index = Number($("cameraIndex").value);
+  let second = null;
+  if (sourceKind === "camera") {
+    Object.assign(source, cameraSource(slots[0]));
+    if ($("cameraCount").value === "2") second = cameraSource(slots[1]);
+    saveCameras();
+  }
   if (sourceKind === "url") source.url = $("streamUrl").value;
   if (sourceKind === "file") source.name = $("videoName").value;
   const settings = {
@@ -475,11 +684,12 @@ async function start() {
     realtime: $("realtime").checked,
     mic: $("mic").value,
     start: sourceKind === "file" ? seconds($("startAt").value) : 0,
+    need_players: Number($("needPlayers").value),
   };
   soundOn();
   try {
     $("start").disabled = true;
-    await api("/api/start", { source, settings });
+    await api("/api/start", { source, second, settings });
   } catch (error) {
     $("start").disabled = false;
     showError(error);
@@ -502,7 +712,7 @@ function upload(file) {
     fillVideos(data.videos, data.name);
   };
   request.onerror = () => { bar.hidden = true; showError(new Error("Upload failed")); };
-  request.open("POST", "/api/upload");
+  request.open("POST", serverUrl("/api/upload"));
   request.setRequestHeader("X-Key", key);
   request.send(form);
 }
@@ -517,6 +727,27 @@ function wire() {
   $("videoName").onchange = finishedButton;
   $("playFinished").onclick = () => { soundOn(); playFinished(); };
   $("soundOn").onclick = soundOn;
+
+  slots.forEach((slot) => {
+    const { device, address } = slotParts(slot);
+    device.onchange = () => onDeviceChosen(slot);
+    address.onchange = saveCameras;
+    slot.querySelector(".look").onclick = () => lookAtCamera(slot);
+  });
+  $("cameraCount").onchange = (event) => { setCameraCount(Number(event.target.value)); saveCameras(); };
+  $("swapCameras").onclick = swapCameras;
+  $("refreshCameras").onclick = loadCameras;
+  $("cameraPage").href = pageLink("camera.html");
+  // Camera 2 in the corner: a click (or Enter) makes it the big picture.
+  for (const picture of [canvas, canvas2]) {
+    picture.onclick = () => { if (picture.classList.contains("inset")) swapPictures(); };
+    picture.onkeydown = (event) => {
+      if ((event.key === "Enter" || event.key === " ") && picture.classList.contains("inset")) {
+        event.preventDefault();
+        swapPictures();
+      }
+    };
+  }
 
   document.querySelectorAll("#control [data-action]").forEach((button) => {
     button.onclick = () => {
@@ -546,6 +777,8 @@ function wire() {
 
 async function boot() {
   wire();
+  await findServer();               // the iPhone app asks for the PC's address
+  showServer($("serverName"));
   try {
     const state = await api("/api/state");
     operator = state.operator;
@@ -560,12 +793,20 @@ async function boot() {
       }));
     });
     fillVideos(state.videos);
+    fillCameras(state.cameras || []);
+    setCameraCount(chosen.count === 2 ? 2 : 1);
     if (state.mics) {
       $("mics").replaceChildren(...state.mics.map((name) => {
         const option = document.createElement("option");
         option.value = name;
         return option;
       }));
+    }
+    if (state.share) {
+      // What a phone on the same Wi-Fi needs to join (the iPhone app asks for both).
+      $("share").hidden = false;
+      $("share").textContent = `Phones and other PCs on this Wi-Fi: viewers open ${state.share.url} · ` +
+        `the iPhone app and the operator use address ${state.share.address} with key ${state.share.key}`;
     }
     if (!operator) $("idleText").textContent = "The commentary starts when the operator starts the match.";
     $("soundOn").hidden = false;

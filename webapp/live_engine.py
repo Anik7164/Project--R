@@ -1,6 +1,11 @@
 """
 Live commentary engine: one camera (or stream, or a video played as if
 live) in, Bengali commentary lines and speech out, while the match runs.
+A second camera can be shown beside it; the lines come from camera 1.
+
+Nothing is said unless a match is in the picture: no line while the
+camera sends no frames, a black or frozen picture, or fewer people than
+a match has (PictureWatch).
 
 The offline scripts in src/ read a whole video. Here the same parts run
 one frame at a time and the same rules are asked again every TICK seconds
@@ -69,6 +74,20 @@ TEAM_SAMPLE_PER_SECOND = 5.0
 MAX_TEAM_SAMPLES = 3000  # frames of kit samples kept (about 10 min)
 STREAM_WIDTH = 960       # picture sent to the browsers
 STREAM_QUALITY = 70
+SECOND_WIDTH = 640       # ... of camera 2
+SECOND_FPS = 6.0
+FIRST_PICTURE_SECONDS = 20.0   # a camera that opens but shows nothing by then has failed
+LOST_SECONDS = {"camera": 10.0, "url": 20.0, "phone": 45.0}   # ... and one that goes quiet
+
+# Why nothing is said (PictureWatch), as shown on the page.
+HOLD = {
+    "none": "No picture is coming from the camera: commentary is on hold.",
+    "blank": "The picture is black or blank (lens covered, or the wrong camera?): "
+             "commentary is on hold.",
+    "frozen": "The picture is not moving: commentary is on hold.",
+    "empty": "No match in view (no ball and no players together in the picture): "
+             "commentary is on hold.",
+}
 
 # Seconds after an event before it can be said: what its rule still needs
 # to see (see the module text).
@@ -114,7 +133,7 @@ class FrameSource(threading.Thread):
     def __init__(self, spec, process_fps, realtime=True):
         super().__init__(daemon=True)
         self.spec, self.process_fps, self.realtime = spec, process_fps, realtime
-        self.live = spec["kind"] in ("camera", "url")
+        self.live = spec["kind"] in ("camera", "url", "phone")
         self.drop = self.live or realtime
         self.cond = threading.Condition()
         self.slot = None
@@ -124,9 +143,12 @@ class FrameSource(threading.Thread):
         self.error = None
         self.dropped = 0
         self.duration = None
+        self.last_wall = None        # time.monotonic() of the newest picture
 
     def _open(self):
         kind = self.spec["kind"]
+        if kind == "phone":
+            return _PushCapture(self.spec["feed"])
         if kind == "camera":
             index = int(self.spec.get("index", 0))
             capture = (cv2.VideoCapture(index, cv2.CAP_DSHOW)
@@ -143,11 +165,16 @@ class FrameSource(threading.Thread):
 
     def describe(self):
         kind = self.spec["kind"]
+        if self.spec.get("label"):
+            return self.spec["label"]
         if kind == "camera":
             return f"camera {self.spec.get('index', 0)}"
+        if kind == "phone":
+            return f"phone camera {self.spec['feed'].name}"
         return self.spec["url"] if kind == "url" else Path(self.spec["path"]).name
 
     def _offer(self, item):
+        self.last_wall = time.monotonic()
         if not self.drop:
             while not self.stopping.is_set():
                 try:
@@ -181,16 +208,17 @@ class FrameSource(threading.Thread):
             step = 1.0 / self.process_fps
             start, next_at = time.monotonic(), 0.0
             if self.live:
-                misses = 0
+                limit = LOST_SECONDS[self.spec["kind"]]
+                last_ok = time.monotonic()
                 while not self.stopping.is_set():
                     ok, frame = capture.read()
                     if not ok:
-                        misses += 1
-                        if misses > 50:
-                            raise RuntimeError("The camera or stream stopped sending pictures.")
+                        if time.monotonic() - last_ok > limit:
+                            raise RuntimeError(
+                                f"{self.describe()} sent no picture for {limit:.0f} s.")
                         time.sleep(0.1)
                         continue
-                    misses = 0
+                    last_ok = time.monotonic()
                     at = time.monotonic() - start
                     if at < next_at:
                         continue
@@ -232,6 +260,132 @@ class FrameSource(threading.Thread):
             self.ended = True
             with self.cond:
                 self.cond.notify()
+
+
+class PushFeed:
+    """Pictures another device (a phone's camera page) sends in over the
+    network, newest first: the server puts JPEGs in, a FrameSource of
+    kind "phone" takes them out."""
+
+    def __init__(self, name):
+        self.name = name
+        self.cond = threading.Condition()
+        self.jpeg = None
+        self.count = 0
+        self.last_wall = 0.0
+        self.closed = False
+
+    def push(self, jpeg):
+        with self.cond:
+            self.jpeg, self.count, self.last_wall = jpeg, self.count + 1, time.monotonic()
+            self.cond.notify_all()
+
+    def close(self):
+        with self.cond:
+            self.closed = True
+            self.cond.notify_all()
+
+    def fresh(self, within=3.0):
+        return not self.closed and self.jpeg is not None and \
+            time.monotonic() - self.last_wall <= within
+
+    def wait(self, seen, timeout):
+        """The newest JPEG if it is newer than number `seen`, else None."""
+        with self.cond:
+            if self.count == seen and not self.closed:
+                self.cond.wait(timeout)
+            if self.count == seen:
+                return None
+            return self.count, self.jpeg
+
+
+class _PushCapture:
+    """A PushFeed read like a cv2.VideoCapture."""
+
+    def __init__(self, feed):
+        self.feed, self.seen = feed, feed.count if not feed.fresh() else feed.count - 1
+
+    def isOpened(self):
+        return True
+
+    def read(self):
+        item = self.feed.wait(self.seen, 0.5)
+        if item is None:
+            return False, None
+        self.seen, jpeg = item
+        frame = cv2.imdecode(np.frombuffer(jpeg, dtype=np.uint8), cv2.IMREAD_COLOR)
+        return frame is not None, frame
+
+    def release(self):
+        pass
+
+
+class PictureWatch:
+    """Is a match in the picture? Commentary is only said while it is.
+
+    state(): "ok", or why not:
+      none    no frame for NO_PICTURE seconds (a live camera or stream)
+      blank   black or one flat colour for BLANK seconds (lens cap, a
+              virtual camera that is switched off)
+      frozen  the very same picture for FROZEN seconds (a placeholder image)
+      empty   in the last EMPTY seconds neither the ball nor `need`
+              people together were seen in at least SEEN frames (a desk,
+              a wall, an empty pitch). Local footage often has one or two
+              tracked players in a frame, so this asks for little: on
+              the project's match videos it never fired, on a camera
+              pointed at nothing it always does.
+    Times are seconds of the match feed, except for "none"."""
+
+    NO_PICTURE = 3.0
+    BLANK = 2.0
+    FROZEN = 5.0
+    EMPTY = 20.0
+    SEEN = 3
+
+    def __init__(self, need, live):
+        self.need, self.live = need, live
+        self.people = deque()         # (seconds, people in that frame, ball found)
+        self.last_at = None
+        self.last_wall = None
+        self.blank_since = None
+        self.same_since = None
+        self._small = None
+
+    def frame(self, at, picture, people, wall=None, ball=False):
+        self.last_at, self.last_wall = at, wall
+        self.people.append((at, people, bool(ball)))
+        while self.people[0][0] < at - self.EMPTY:
+            self.people.popleft()
+        if picture is None:
+            return
+        small = cv2.resize(cv2.cvtColor(picture, cv2.COLOR_BGR2GRAY), (64, 36),
+                           interpolation=cv2.INTER_AREA)
+        blank = float(small.mean()) < 16 or float(small.std()) < 4
+        if not blank:
+            self.blank_since = None
+        elif self.blank_since is None:
+            self.blank_since = at
+        same = self._small is not None and float(cv2.absdiff(small, self._small).mean()) < 0.02
+        if not same:
+            self.same_since = None
+        elif self.same_since is None:
+            self.same_since = at
+        self._small = small
+
+    def state(self, wall=None):
+        if self.last_at is None:
+            return "none"
+        if self.live and wall is not None and self.last_wall is not None \
+                and wall - self.last_wall > self.NO_PICTURE:
+            return "none"
+        if self.blank_since is not None and self.last_at - self.blank_since >= self.BLANK:
+            return "blank"
+        if self.same_since is not None and self.last_at - self.same_since >= self.FROZEN:
+            return "frozen"
+        if self.need > 0 and sum(ball for _, _, ball in self.people) < self.SEEN \
+                and sum(people >= self.need for _, people, _ in self.people) < self.SEEN:
+            return "empty"
+        return "ok"
 
 
 # ----------------------------------------------------------------------
@@ -404,6 +558,14 @@ class Speaker(threading.Thread):
         if self.voice_name != "off":
             self.queue.put(line)
 
+    def drop(self):
+        """Forget the lines not spoken yet."""
+        try:
+            while True:
+                self.queue.get_nowait()
+        except queue.Empty:
+            pass
+
     def _load(self):
         import speak_commentary as speech
 
@@ -500,12 +662,14 @@ DEFAULTS = {
     "boxes": True,           # draw players and ball on the picture sent out
     "mic": "",               # ffmpeg sound input for a camera, e.g. audio=Microphone (USB)
     "start": 0.0,            # a file: start this many seconds in
+    "need_players": 2,       # no ball and never this many people together: nothing is said (0: off)
 }
 
 
 class LiveMatch:
-    def __init__(self, spec, settings, publish_json, publish_bytes):
+    def __init__(self, spec, settings, publish_json, publish_bytes, second=None):
         self.spec = spec
+        self.second_spec = second     # camera 2: shown, not analysed
         self.settings = {**DEFAULTS, **{k: v for k, v in (settings or {}).items()
                                         if k in DEFAULTS and v is not None}}
         self.publish_json, self.publish_bytes = publish_json, publish_bytes
@@ -517,8 +681,16 @@ class LiveMatch:
         self.lock = threading.Lock()
         self.say_lock = threading.RLock()   # one look or operator button at a time
         self.stopping = threading.Event()
+        self.cut = False              # stopped by the operator: nothing more is said
         self.state = "starting"       # starting | running | ended | failed
         self.message = "Starting"
+        # Is a match in the picture (PictureWatch)? Lines are only said while it is.
+        self.watch = PictureWatch(int(self.settings["need_players"]),
+                                  spec["kind"] in ("camera", "url", "phone"))
+        self.picture = "ok"           # the watch's answer at the last look
+        self.blind = []               # [start, end or None]: nothing said about these
+        self.second = None
+        self.second_error = None
         self.clock = 0.0              # seconds of match seen so far
         self.started_wall = time.time()
 
@@ -566,7 +738,11 @@ class LiveMatch:
         threading.Thread(target=self._run, daemon=True).start()
 
     def stop(self):
+        """The operator's Stop: the lines still waiting are not said."""
+        self.cut = True
         self.stopping.set()
+        if self.speaker is not None:
+            self.speaker.drop()
 
     def note(self, text):
         self.notes.append(text)
@@ -594,7 +770,12 @@ class LiveMatch:
             self.speaker.start()
             analyser = threading.Thread(target=self._analyse_loop, daemon=True)
             analyser.start()
-            self._status(f"Live: {self.source.describe()}", "running")
+            if self.second_spec is not None:
+                threading.Thread(target=self._second_loop, daemon=True).start()
+            # "Live" is only said once a picture has really arrived and been looked at.
+            name = self.source.describe()
+            self._status(f"Waiting for the picture from {name}")
+            waiting_since = time.monotonic()
 
             last_stats, done_at = time.monotonic(), deque(maxlen=40)
             while not self.stopping.is_set():
@@ -602,8 +783,19 @@ class LiveMatch:
                 if item is None:
                     if self.source.ended:
                         break
+                    if self.state == "starting" and self.source.live and \
+                            time.monotonic() - waiting_since > FIRST_PICTURE_SECONDS:
+                        raise RuntimeError(
+                            f"{name} opened but sent no picture in "
+                            f"{FIRST_PICTURE_SECONDS:.0f} s. Is it the right camera, and is "
+                            "another program using it?")
+                    if time.monotonic() - last_stats >= 1.0:
+                        last_stats = time.monotonic()
+                        self.publish_json(self.stats())
                     continue
                 self._process(*item)
+                if self.state == "starting":
+                    self._status(f"Live: {name}", "running")
                 done_at.append(time.monotonic())
                 if len(done_at) > 1:
                     self.rate = (len(done_at) - 1) / max(1e-6, done_at[-1] - done_at[0])
@@ -612,9 +804,14 @@ class LiveMatch:
                     self.publish_json(self.stats())
             if self.source.error:
                 raise RuntimeError(self.source.error)
-            self._flush_tracks()
-            self._tick(final=True)
-            self._status("The match feed ended", "ended")
+            if self.frames_done == 0 and not self.cut:
+                raise RuntimeError(f"No picture came from {name}.")
+            if self.cut:
+                self._status("Stopped", "ended")
+            else:
+                self._flush_tracks()
+                self._tick(final=True)
+                self._status("The match feed ended", "ended")
         except Exception as error:
             traceback.print_exc()
             self._status(f"Stopped: {error}", "failed")
@@ -622,9 +819,13 @@ class LiveMatch:
             self.stopping.set()
             if self.source is not None:
                 self.source.stopping.set()
+            if self.second is not None:
+                self.second.stopping.set()
             if self.sound is not None:
                 self.sound.close()
             if self.speaker is not None:
+                if self.cut or self.state == "failed":
+                    self.speaker.drop()
                 # Let the last lines be spoken before the voice goes.
                 deadline = time.monotonic() + 20
                 while self.speaker.backlog() and time.monotonic() < deadline:
@@ -681,7 +882,7 @@ class LiveMatch:
 
     def _start_sound(self):
         kind = self.spec["kind"]
-        if kind == "camera":
+        if kind in ("camera", "phone"):
             mic = (self.settings["mic"] or "").strip()
             if not mic:
                 self.note("No microphone chosen: whistles and the crowd are not heard, "
@@ -776,9 +977,62 @@ class LiveMatch:
             self._commit(*self.held.popleft())
 
         ball = self._find_ball(index, frame, width, warp, cut)
+        self.watch.frame(at, frame, len(rows), self.source.last_wall if self.source else None,
+                         ball is not None)
         self.frames_done += 1
         self.clock = at
         self._send_picture(at, frame, rows, ball)
+
+    # -- camera 2 ------------------------------------------------------
+
+    def _second_loop(self):
+        """Camera 2 is passed on to the browsers beside camera 1. It is not
+        analysed: the lines come from camera 1."""
+        self.second = FrameSource(self.second_spec, SECOND_FPS, True)
+        name = self.second.describe()
+        self.second.start()
+        while not self.stopping.is_set():
+            item = self.second.get()
+            if item is None:
+                if self.second.ended:
+                    break
+                continue
+            frame = item[1]
+            scale = min(1.0, SECOND_WIDTH / frame.shape[1])
+            if scale < 1.0:
+                frame = cv2.resize(frame, None, fx=scale, fy=scale, interpolation=cv2.INTER_AREA)
+            ok, jpeg = cv2.imencode(".jpg", frame, [cv2.IMWRITE_JPEG_QUALITY, STREAM_QUALITY])
+            if ok:
+                # On camera 1's clock, so the browsers show both equally late.
+                self.publish_bytes(b"\x03" + struct.pack("<d", self.clock) + jpeg.tobytes())
+        if not self.stopping.is_set():
+            self.second_error = self.second.error or "it stopped sending pictures"
+            self.note(f"Camera 2 ({name}) stopped: {self.second_error} "
+                      "The match goes on with camera 1.")
+
+    # -- is there a match to talk about? ---------------------------------
+
+    def picture_state(self):
+        if self.frames_done == 0:
+            return "none"
+        return self.watch.state(time.monotonic())
+
+    def _watch_picture(self, now):
+        """Opens and closes the stretches nothing is said about."""
+        state = self.picture_state()
+        if state == self.picture:
+            return state
+        if self.picture == "ok":
+            # "empty" is only known after EMPTY seconds of it.
+            back = PictureWatch.EMPTY if state == "empty" else 0.0
+            self.blind.append([max(0.0, now - back), None])
+        elif state == "ok":
+            for stretch in self.blind:
+                if stretch[1] is None:
+                    stretch[1] = now
+        self.picture = state
+        self.publish_json(self.stats())
+        return state
 
     def _commit(self, index, rows, sample, height):
         from identify_teams import DETECTOR_ROLES, MAX_SAMPLES_PER_PLAYER, ROLE_MAX_HEIGHT
@@ -894,7 +1148,7 @@ class LiveMatch:
         if self.full_time is not None and seconds >= self.full_time:
             return True
         return any(start <= seconds and (end is None or seconds <= end)
-                   for start, end in self.pauses)
+                   for start, end in self.pauses + self.blind)
 
     def in_shootout(self, seconds):
         return any(start <= seconds <= end for start, end in self.shootouts)
@@ -907,6 +1161,8 @@ class LiveMatch:
 
     def phase(self):
         now = self.clock
+        if self.picture != "ok":
+            return "hold"
         if self.full_time is not None and now >= self.full_time:
             return "full_time"
         if self.kickoff is not None and now < self.kickoff:
@@ -1008,8 +1264,8 @@ class LiveMatch:
 
     def _look(self, final):
         now = self.clock
-        if self.frames_done == 0:
-            return
+        if self._watch_picture(now) != "ok" or self.frames_done == 0 or self.cut:
+            return                      # no match in the picture: nothing is said
         self._refit_teams(now)
         match, window_start = self._snapshot(now)
         cues = []
@@ -1202,6 +1458,9 @@ class LiveMatch:
 
     def _operator(self, action, team):
         now = self.clock
+        state = self.picture_state()
+        if action not in ("pause", "resume", "undo_goal") and state in ("none", "blank", "frozen"):
+            raise ValueError(HOLD[state].replace("commentary is on hold", "nothing is said"))
         with self.lock:
             teams = {tid: dict(d) for tid, d in self.teams.items()}
             colours = dict(self.team_colours)
@@ -1300,6 +1559,14 @@ class LiveMatch:
             "source": self.source.describe() if self.source else "",
             "live_source": bool(self.source and self.source.live),
             "realtime": bool(self.settings["realtime"]),
+            # Why nothing is said just now ("" while a match is in the picture).
+            "picture": self.picture,
+            "hold": HOLD.get(self.picture, "") if self.state == "running" else "",
+            # Stopped by hand or broken: the browsers drop what they still held back.
+            "cut": self.cut or self.state == "failed",
+            "second": None if self.second_spec is None else {
+                "name": self.second.describe() if self.second else "",
+                "error": self.second_error},
         }
 
     def hello(self):

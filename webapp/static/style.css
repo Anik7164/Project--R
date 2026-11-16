@@ -41,6 +41,8 @@ small { color: var(--muted); }
     linear-gradient(90deg, transparent 47%, var(--bg) 47% 53%, transparent 53%),
     var(--pitch);
 }
+.top-right { display: flex; align-items: center; gap: 12px; min-width: 0; }
+.top-right .server { padding: 4px 9px; font-size: 12px; white-space: nowrap; }
 .status { display: flex; align-items: center; gap: 8px; color: var(--muted); font-size: 13px; text-align: right; }
 .status .dot { width: 9px; height: 9px; border-radius: 50%; background: var(--muted); flex: none; }
 .status.running .dot { background: var(--pitch); box-shadow: 0 0 0 4px rgba(53,194,106,.18); }
@@ -76,6 +78,20 @@ small { color: var(--muted); }
   border: 1px solid var(--line); aspect-ratio: 16 / 9;
 }
 .stage canvas, .stage video { width: 100%; height: 100%; object-fit: contain; display: block; background: #000; }
+.stage canvas { position: absolute; inset: 0; }
+/* Camera 2 (or camera 1 after a click on it): the small picture in the corner. */
+.stage canvas.inset {
+  inset: 84px 12px auto auto; width: 27%; height: auto; aspect-ratio: 16 / 9; z-index: 1;
+  border: 2px solid rgba(255,255,255,.85); border-radius: 8px; cursor: pointer;
+  box-shadow: 0 4px 18px rgba(0,0,0,.55);
+}
+.stage canvas.inset:hover, .stage canvas.inset:focus-visible { border-color: var(--pitch); outline: none; }
+.hold {
+  position: absolute; left: 50%; top: 12px; transform: translateX(-50%); z-index: 2;
+  max-width: min(78%, 560px); text-align: center; text-wrap: balance;
+  background: rgba(20,14,0,.86); color: #ffd98a; border: 1px solid #8a6a12;
+  border-radius: 8px; padding: 7px 12px; font-size: 13px; font-weight: 600;
+}
 .idle {
   position: absolute; inset: 0; display: grid; place-content: center; gap: 6px; text-align: center;
   padding: 20px;
@@ -155,6 +171,26 @@ button.ghost { background: none; color: var(--muted); }
 button.goal { border-color: var(--pitch-dim); color: #9be7b8; font-weight: 600; }
 button.yellow { border-color: #8a6a12; color: #ffd76a; }
 button.red { border-color: #8a2a2d; color: #ff9da0; }
+a.button {
+  font: 500 13px var(--ui); color: var(--text); background: var(--raised); text-decoration: none;
+  border: 1px solid var(--line); border-radius: 7px; padding: 8px 12px; display: inline-block;
+}
+a.button.ghost { background: none; color: var(--muted); }
+a.button:hover { border-color: var(--muted); }
+.cameras { display: grid; gap: 10px; }
+.camera-slot {
+  border: 1px solid var(--line); border-radius: 8px; padding: 10px; display: grid; gap: 8px;
+}
+.camera-slot h3 { font: 600 14px var(--ui); display: flex; align-items: baseline; gap: 8px; flex-wrap: wrap; }
+.camera-slot h3 small { font-weight: 400; font-size: 12px; }
+.camera-slot[data-slot="1"] { border-color: var(--pitch-dim); }
+.preview { display: grid; gap: 8px; justify-items: start; }
+.preview img { width: 100%; max-width: 320px; border-radius: 6px; border: 1px solid var(--line); display: block; }
+#swapCameras { justify-self: center; }
+.feed-note {
+  margin: 10px 16px 0; padding: 8px 10px; font-size: 12px; color: #ffd98a;
+  border: 1px solid #8a6a12; border-radius: 7px; background: rgba(243,178,60,.08);
+}
 .actions { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
 .error { color: #ff9da0; font-size: 13px; }
 .buttons { display: flex; flex-wrap: wrap; gap: 7px; }
@@ -204,3 +240,24 @@ button.red { border-color: #8a2a2d; color: #ff9da0; }
   .clock { padding-inline: 8px; }
 }
 @media (prefers-reduced-motion: reduce) { * { animation: none !important; } }
+
+/* The iPhone app's first screen: which PC? */
+.connect {
+  position: fixed; inset: 0; z-index: 20; background: var(--bg); display: grid; place-items: center;
+  padding: max(20px, env(safe-area-inset-top)) 20px 20px; overflow-y: auto;
+}
+.connect-card { display: grid; gap: 14px; width: min(100%, 420px); }
+.connect-card h2 { font: 700 26px/1.2 var(--bn); }
+.connect-card p { color: var(--muted); font-size: 13px; }
+.connect-card code { color: var(--text); font-size: 12px; overflow-wrap: anywhere; }
+.connect-card input { font-size: 16px; }   /* smaller text makes iOS zoom the page */
+.connect-card button { padding-block: 11px; font-size: 15px; }
+body { padding: env(safe-area-inset-top) env(safe-area-inset-right) env(safe-area-inset-bottom) env(safe-area-inset-left); }
+@media (max-width: 560px) {
+  .top-right { flex-direction: column; align-items: flex-end; gap: 4px; }
+  .stage canvas.inset { width: 34%; top: 92px; }
+}
+
+/* camera.html: this device as a camera */
+.camera-page { display: grid; gap: 14px; padding: 20px; max-width: 900px; margin: 0 auto; }
+@media (max-width: 560px) { .camera-page { padding: 16px; } }
