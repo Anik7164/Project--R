@@ -1,0 +1,3 @@
+# The desktop app (desktop/app.py), on top of requirements-webapp.txt.
+#   pip install -r requirements-desktop.txt
+pywebview>=5.0            # the app window (on Windows it uses the WebView2 that Windows 10/11 already has)
