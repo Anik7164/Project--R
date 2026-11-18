@@ -97,6 +97,10 @@ python desktop/app.py --connect 192.168.0.5 # only a window onto the PC that run
 powershell -ExecutionPolicy Bypass -File desktop\make_shortcut.ps1    # a "Project R" shortcut with the icon
 ```
 
+`Project R.bat` uses the project's own Python (`.venv` or `venv` in the project folder, else the Python on PATH) and first checks that the web app is installed in it. If something is missing, its window stays open and prints the exact `pip install` line for that Python. If the app starts but then fails, a message box shows why, and the details are in `.cache/desktop/app.log` and `.cache/desktop/server.log`.
+
+**A slow picture?** The *Camera* box under the picture shows how many pictures a second camera 1 really gives, and how many the page shows (the camera tiles show it per camera). A low first number is the camera, not the PC: webcams slow down in poor light, and two webcams on one USB hub share its bandwidth. The page also says so in the notes after a few seconds.
+
 Without pywebview it opens an Edge or Chrome app window instead. Its settings and the server log stay in `.cache/desktop/` inside the project. (pywebview was chosen over Electron or Tauri because it needs no Node.js or Rust toolchain and no 300 MB browser of its own: the heavy part of this project is the Python engine, which has to be installed anyway.)
 
 ### iPhone app

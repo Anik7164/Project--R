@@ -563,7 +563,7 @@ def test_a_camera_that_stops_goes_off_air(tmp_path, monkeypatch):
                               others=[{"kind": "camera", "index": i} for i in (1, 2, 3)])
 
     class DeadCamera:
-        error, ended, stopping = "unplugged", True, None
+        error, ended, stopping, live, rate = "unplugged", True, None, True, 0.0
 
         def __init__(self, *args, **kwargs):
             import threading
@@ -649,3 +649,24 @@ def test_the_camera_picture_is_sent_while_the_models_are_still_loading(monkeypat
     assert "Loading the models" in match.message or "Opening" in match.message
     match.stop()
     loading.set()
+
+
+def test_a_slow_browser_gets_the_newest_picture_not_a_backlog():
+    import asyncio
+    import struct
+
+    import server
+
+    async def run():
+        box = server.Outbox()
+        for i in range(10):                          # ten pictures of camera 1 while busy
+            box.put_nowait(b"\x01" + struct.pack("<d", i) + b"jpg")
+        box.put_nowait(b"\x03" + struct.pack("<d", 9) + b"jpg")
+        box.put_nowait({"type": "line"})
+        box.put_nowait(b"\x02" + struct.pack("<d", 9) + b"sound")
+        return [await box.get() for _ in range(4)]
+
+    sent = asyncio.run(run())
+    pictures = [item for item in sent if isinstance(item, bytes) and item[0] in (1, 3)]
+    assert len(pictures) == 2 and struct.unpack("<d", pictures[0][1:9])[0] == 9.0
+    assert {"type": "line"} in sent and any(isinstance(i, bytes) and i[0] == 2 for i in sent)

@@ -6,7 +6,7 @@
 // (SERVER, key and friends: common.js.)
 
 const $ = (id) => document.getElementById(id);
-const SEND_RATE = 15;                 // pictures a second: the PC analyses up to 12 and shows them all
+const SEND_RATE = 25;                 // pictures a second: the PC analyses up to 12 and shows up to 20
 const WAITING_LIMIT = 1_500_000;      // bytes not sent yet: skip pictures, do not queue them
 
 let stream = null;
@@ -77,10 +77,13 @@ function connect() {
   };
 }
 
+let packing = false;
+
 function sendPicture() {
   const video = $("view");
   if (!socket || socket.readyState !== WebSocket.OPEN || !video.videoWidth) return;
   if (socket.bufferedAmount > WAITING_LIMIT) return;      // slow Wi-Fi: newest picture wins
+  if (packing) return;                                    // a slow phone: the last one is not packed yet
   const grab = $("grab");
   const scale = Math.min(1, Number($("size").value) / video.videoWidth);
   const width = Math.round(video.videoWidth * scale);
@@ -90,7 +93,9 @@ function sendPicture() {
     grab.height = height;
   }
   grab.getContext("2d").drawImage(video, 0, 0, width, height);
+  packing = true;
   grab.toBlob((blob) => {
+    packing = false;
     if (!blob || !socket || socket.readyState !== WebSocket.OPEN) return;
     socket.send(blob);
     sent += 1;

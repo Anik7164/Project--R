@@ -77,7 +77,7 @@ MAX_TEAM_SAMPLES = 3000  # frames of kit samples kept (about 10 min)
 STREAM_WIDTH = 960       # picture sent to the browsers
 STREAM_QUALITY = 70
 OTHER_WIDTH = 960        # ... of cameras 2 and 3 (one of them may be on air)
-OTHER_FPS = 15.0
+OTHER_FPS = 20.0
 MAX_CAMERAS = 3
 # The first byte of a picture message: which camera it is from.
 PICTURE_KIND = {1: 1, 2: 3, 3: 4}
@@ -162,6 +162,16 @@ class FrameSource(threading.Thread):
         self.dropped = 0
         self.duration = None
         self.last_wall = None        # time.monotonic() of the newest picture
+        self.read_times = deque(maxlen=90)   # when the last pictures came from a live source
+        self.mode = ""               # what the camera really gives, e.g. "1280x720 MJPG"
+
+    @property
+    def rate(self):
+        """Pictures a second the camera or stream really gives (last few seconds)."""
+        times = self.read_times
+        if len(times) < 2 or time.monotonic() - times[-1] > 2.0:
+            return 0.0
+        return (len(times) - 1) / max(1e-6, times[-1] - times[0])
 
     def _open(self):
         kind = self.spec["kind"]
@@ -178,7 +188,12 @@ class FrameSource(threading.Thread):
             capture.set(cv2.CAP_PROP_FRAME_WIDTH, 1280)
             capture.set(cv2.CAP_PROP_FRAME_HEIGHT, 720)
             capture.set(cv2.CAP_PROP_FPS, 30)
+            capture.set(cv2.CAP_PROP_FOURCC, cv2.VideoWriter_fourcc(*"MJPG"))   # again: some drivers reset it with the size
             capture.set(cv2.CAP_PROP_BUFFERSIZE, 1)
+            code = int(capture.get(cv2.CAP_PROP_FOURCC))
+            fourcc = "".join(chr((code >> 8 * i) & 0xFF) for i in range(4)).strip("\x00 ") or "?"
+            self.mode = (f"{int(capture.get(cv2.CAP_PROP_FRAME_WIDTH))}x"
+                         f"{int(capture.get(cv2.CAP_PROP_FRAME_HEIGHT))} {fourcc}")
         elif kind == "url":
             capture = cv2.VideoCapture(self.spec["url"])
         else:
@@ -244,6 +259,7 @@ class FrameSource(threading.Thread):
                         time.sleep(0.1)
                         continue
                     last_ok = time.monotonic()
+                    self.read_times.append(last_ok)
                     at = time.monotonic() - start
                     if self.on_picture is not None and at >= next_show:
                         next_show = max(next_show + self.display_step, at)
@@ -894,6 +910,7 @@ class LiveMatch:
             waiting_since = time.monotonic()
 
             last_stats, done_at = time.monotonic(), deque(maxlen=40)
+            speed_check_at = time.monotonic() + 8.0
             while not self.stopping.is_set():
                 item = self.source.get()
                 if item is None:
@@ -915,6 +932,9 @@ class LiveMatch:
                 done_at.append(time.monotonic())
                 if len(done_at) > 1:
                     self.rate = (len(done_at) - 1) / max(1e-6, done_at[-1] - done_at[0])
+                if speed_check_at is not None and time.monotonic() > speed_check_at:
+                    speed_check_at = None
+                    self._check_camera_speed()
                 if time.monotonic() - last_stats >= 1.0:
                     last_stats = time.monotonic()
                     self.publish_json(self.stats())
@@ -1189,6 +1209,24 @@ class LiveMatch:
             self.note(f"Camera {number} ({name}) stopped: {self.other_errors[number]}"
                       f"{back} The match goes on with camera 1.")
             self.publish_json(self.stats())
+
+    @staticmethod
+    def _camera_rate(source):
+        return round(source.rate, 1) if source is not None and source.live else None
+
+    def _check_camera_speed(self):
+        """Once, a few seconds into the match: a webcam that gives few
+        pictures makes the picture slow whatever this PC does; say so and why."""
+        for number, source in [(1, self.source), *sorted(self.others.items())]:
+            if source is None or not source.live or source.spec["kind"] == "phone":
+                continue
+            rate = source.rate
+            if 0 < rate < 14:
+                mode = f" at {source.mode}" if source.mode else ""
+                self.note(f"Camera {number} ({source.describe()}) gives only {rate:.0f} pictures "
+                          f"a second{mode}, so its picture looks slow. Webcams slow down in poor "
+                          "light; also try another USB port (not the same hub as another "
+                          "camera) or close other programs using the camera.")
 
     def put_on_air(self, number):
         """The operator's choice of what viewers and the stream see."""
@@ -1760,11 +1798,12 @@ class LiveMatch:
             # Stopped by hand or broken: the browsers drop what they still held back.
             "cut": self.cut or self.state == "failed",
             "cameras": [{"number": 1, "name": self.source.describe() if self.source else "",
-                         "error": None}] + [
+                         "error": None, "fps": self._camera_rate(self.source)}] + [
                 {"number": number,
                  "name": (self.others[number].describe() if number in self.others
                           else spec.get("label", "")),
-                 "error": self.other_errors.get(number)}
+                 "error": self.other_errors.get(number),
+                 "fps": self._camera_rate(self.others.get(number))}
                 for number, spec in enumerate(self.other_specs, start=2)],
             "on_air": self.on_air,
         }

@@ -55,7 +55,10 @@ function showError(error) {
 // The operator sees the match as it happens (they press the buttons on
 // time); viewers see it late, with each line on its moment. Each keeps
 // their own setting.
-const JITTER = 0.4;         // seconds always held back: smooth pictures over Wi-Fi
+// Seconds always held back to smooth the pictures: a little over Wi-Fi, next
+// to nothing for the operator on the PC that runs the commentary.
+const LOCAL = !SHELL && ["127.0.0.1", "localhost", "[::1]"].includes(location.hostname);
+let JITTER = 0.4;
 const delayKey = () => (BROADCAST ? "delay broadcast" : operator ? "delay operator" : "delay");
 let delay = 10;
 let base = null;            // performance seconds at match second 0, delay included
@@ -132,7 +135,8 @@ function setCameras(cameras, air) {
     view.hidden = number > count;
     view.classList.toggle("on-air", count > 1 && number === onAir);
     view.querySelector(".view-name").textContent = camera
-      ? `Camera ${number}${camera.name ? ` · ${camera.name}` : ""}` : `Camera ${number}`;
+      ? `Camera ${number}${camera.name ? ` · ${camera.name}` : ""}${camera.fps ? ` · ${Math.round(camera.fps)}/s` : ""}`
+      : `Camera ${number}`;
     view.querySelector(".view-air").textContent = camera && camera.error
       ? "Stopped" : number === onAir ? "On air" : "Put on air";
     view.querySelector(".view-air").disabled = Boolean(camera && camera.error) || number === onAir;
@@ -169,6 +173,7 @@ function render() {
     while (cam.frames.length && cam.frames[0].t <= at) pick = cam.frames.shift();
     if (pick && pick.t !== cam.drawn) {
       cam.drawn = pick.t;
+      cam.shown = (cam.shown || 0) + 1;
       draw(cam.canvas, cam.context, pick.blob);
     }
   });
@@ -343,6 +348,8 @@ function cutNow() {
   $("idle").hidden = false;
 }
 
+let lastShown = null;
+
 function onStats(next) {
   const before = stats;
   stats = next;
@@ -397,7 +404,15 @@ function onStats(next) {
   $("tBall").textContent = Math.round(next.ball_share * 100) + "%";
   $("tWhistles").textContent = next.sound ? next.whistles : "no sound";
   $("tRoars").textContent = next.sound ? next.roars : "–";
-  $("tDropped").textContent = next.dropped;
+  // How many pictures a second the camera gives and this page shows: a
+  // slow picture is the camera's doing when the first number is low.
+  const camera = (next.cameras || [])[0];
+  const now = nowSeconds();
+  const shown = lastShown ? (cams[0].shown - lastShown.count) / Math.max(0.5, now - lastShown.at) : 0;
+  lastShown = { count: cams[0].shown || 0, at: now };
+  $("tCamera").textContent = camera && camera.fps ? camera.fps.toFixed(0) : "–";
+  $("tShown").textContent = running && shown ? `shown ${shown.toFixed(0)}` : "pictures/s";
+  $("tCamera").parentElement.classList.toggle("warn", Boolean(camera && camera.fps && camera.fps < 14));
 }
 
 function newSession(id) {
@@ -926,6 +941,7 @@ async function boot() {
     document.body.classList.toggle("viewer", !operator || BROADCAST);
     if (!operator || BROADCAST) choosePanel("view");
     delay = Number(remembered(delayKey()) ?? (operator && !BROADCAST ? 0 : 10));
+    if (operator && !BROADCAST && LOCAL) JITTER = 0.12;
     $("delay").value = delay;
     $("delayOut").textContent = `${delay} s`;
     if (operator) {

@@ -72,6 +72,45 @@ app.add_middleware(
     allow_methods=["GET", "POST"], allow_headers=["X-Key", "Content-Type"])
 
 
+class Outbox:
+    """What one browser is still to be sent: lines, stats and sound in
+    order, and of each camera only its newest picture. A browser that is
+    slow (a phone on Wi-Fi, a busy PC) skips pictures and stays on time
+    instead of working through a backlog of old ones."""
+
+    PICTURES = (1, 3, 4)
+
+    def __init__(self):
+        from collections import deque
+
+        self.items = deque()
+        self.pictures = {}           # kind -> the newest picture not sent yet
+        self.event = asyncio.Event()
+        self.turn = False
+
+    def qsize(self):
+        return len(self.items) + len(self.pictures)
+
+    def put_nowait(self, item):
+        if isinstance(item, bytes) and item[0] in self.PICTURES:
+            self.pictures.pop(item[0], None)        # newest last: cameras take turns
+            self.pictures[item[0]] = item
+        else:
+            self.items.append(item)
+        self.event.set()
+
+    async def get(self):
+        while True:
+            # Pictures and the rest take turns, so neither waits on the other.
+            self.turn = not self.turn
+            if self.pictures and (self.turn or not self.items):
+                return self.pictures.pop(next(iter(self.pictures)))
+            if self.items:
+                return self.items.popleft()
+            self.event.clear()
+            await self.event.wait()
+
+
 class Hub:
     """Sends what the engine produces to every open browser."""
 
@@ -445,7 +484,7 @@ def media_spoken(name: str):
 @app.websocket("/ws")
 async def feed(socket_: WebSocket):
     await socket_.accept()
-    client = asyncio.Queue()
+    client = Outbox()
     # A viewer (no operator key) or the broadcast page (?view=air) only gets
     # the camera on air; the operator gets all of them, side by side.
     viewer = bool(hub.key) and not secrets.compare_digest(
@@ -583,15 +622,41 @@ def certificate(address, folder=None):
     return cert_file, key_file
 
 
+def process_alive(pid):
+    """Is process `pid` still there? (psutil does this when installed.)"""
+    import os
+
+    if sys.platform == "win32":
+        import ctypes
+
+        kernel = ctypes.windll.kernel32
+        handle = kernel.OpenProcess(0x1000, False, pid)   # PROCESS_QUERY_LIMITED_INFORMATION
+        if not handle:
+            return False
+        code = ctypes.c_ulong()
+        kernel.GetExitCodeProcess(handle, ctypes.byref(code))
+        kernel.CloseHandle(handle)
+        return code.value == 259                           # STILL_ACTIVE
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        return True
+    return True
+
+
 def exit_with(pid):
     """The desktop app started this server: when its window is gone (even
     if it was killed), the camera and the GPU are let go."""
     import os
     import time
 
-    import psutil
-
-    while psutil.pid_exists(pid):
+    try:
+        from psutil import pid_exists
+    except ImportError:
+        pid_exists = process_alive
+    while pid_exists(pid):
         time.sleep(2)
     if hub.match is not None:
         hub.match.stop()

@@ -8,14 +8,16 @@
 param([switch]$Desktop, [switch]$Share)
 
 $project = Split-Path -Parent $PSScriptRoot
-$python = Join-Path $project ".venv\Scripts\pythonw.exe"
-if (-not (Test-Path $python)) { $python = (Get-Command pythonw -ErrorAction Stop).Source }
+# The shortcut starts "Project R.bat", which finds the project's Python and
+# says what is missing when something is.
+$launcher = Join-Path $project "desktop\Project R.bat"
 $folder = if ($Desktop) { [Environment]::GetFolderPath("Desktop") } else { $project }
 $path = Join-Path $folder "Project R.lnk"
 
 $shortcut = (New-Object -ComObject WScript.Shell).CreateShortcut($path)
-$shortcut.TargetPath = $python
-$shortcut.Arguments = '"' + (Join-Path $project "desktop\app.py") + '"' + $(if ($Share) { " --share" } else { "" })
+$shortcut.TargetPath = $launcher
+$shortcut.Arguments = $(if ($Share) { "--share" } else { "" })
+$shortcut.WindowStyle = 7     # minimised: only the app window shows
 $shortcut.WorkingDirectory = $project
 $shortcut.IconLocation = Join-Path $project "desktop\icon.ico"
 $shortcut.Description = "Project R live Bengali football commentary"

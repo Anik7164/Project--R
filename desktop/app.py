@@ -201,6 +201,31 @@ def tell(text):
             pass
 
 
+NEEDED = [("fastapi", "fastapi"), ("uvicorn", "uvicorn[standard]"), ("multipart", "python-multipart"),
+          ("cv2", "opencv-python"), ("numpy", "numpy"), ("ultralytics", "ultralytics"),
+          ("psutil", "psutil")]
+
+
+def check():
+    """What "Project R.bat" runs first, in a console: is everything the app
+    needs installed in this Python? Prints what is missing."""
+    import importlib.util
+
+    print(f"Python: {sys.executable}  ({sys.version.split()[0]})")
+    missing = [package for module, package in NEEDED if importlib.util.find_spec(module) is None]
+    if importlib.util.find_spec("webview") is None:
+        print("pywebview is not installed: the page opens in an Edge or Chrome window instead "
+              "(pip install -r requirements-desktop.txt for the app window).")
+    if not SERVER.is_file():
+        print(f"Missing: {SERVER}. Is this the whole project, on the branch with the web app?")
+        return 1
+    if missing:
+        print("Missing in this Python: " + ", ".join(missing))
+        return 2
+    print("Everything the app needs is installed.")
+    return 0
+
+
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
     parser.add_argument("--share", action="store_true",
@@ -208,7 +233,11 @@ def main(argv=None):
     parser.add_argument("--connect", metavar="ADDRESS",
                         help="do not run the commentary here: show the one running on another PC")
     parser.add_argument("--port", type=int, default=PORT)
+    parser.add_argument("--check", action="store_true",
+                        help="only say whether everything the app needs is installed")
     args = parser.parse_args(argv)
+    if args.check:
+        return check()
 
     process = None
     if args.connect:
@@ -243,5 +272,26 @@ def main(argv=None):
     return 0
 
 
+def run():
+    """main(), but a crash is shown and written down: with pythonw (no
+    console) it would otherwise vanish without a word."""
+    import traceback
+
+    if sys.stdout is None:                  # pythonw: keep what is printed
+        FOLDER.mkdir(parents=True, exist_ok=True)
+        sys.stdout = sys.stderr = (FOLDER / "app.log").open("w", encoding="utf-8",
+                                                           errors="replace", buffering=1)
+    try:
+        return main()
+    except SystemExit:
+        raise
+    except Exception:
+        text = traceback.format_exc()
+        print(text)
+        tell("Project R could not start.\n\n" + text[-1500:] +
+             f"\n\nLog: {FOLDER / 'app.log'}")
+        return 1
+
+
 if __name__ == "__main__":
-    sys.exit(main())
+    sys.exit(run())
