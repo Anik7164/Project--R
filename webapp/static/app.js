@@ -178,6 +178,7 @@ function render() {
     }
   });
   releaseLines(at);
+  releaseScoreboard(at);
 }
 requestAnimationFrame(render);
 
@@ -331,6 +332,8 @@ function kit(element, colour) {
 // nothing more is shown or said once there is no match feed.
 function cutNow() {
   cams.forEach((cam) => { cam.frames = []; });
+  if (scoreQueue.length) showScoreboard(scoreQueue[scoreQueue.length - 1]);
+  scoreQueue.length = 0;
   base = null;
   audioBase = null;
   waiting.length = 0;
@@ -346,6 +349,41 @@ function cutNow() {
   cams.forEach((cam) => cam.context.clearRect(0, 0, cam.canvas.width, cam.canvas.height));
   setCameras(null, 1);
   $("idle").hidden = false;
+}
+
+// ---------------------------------------------------------------- scoreboard
+
+const scoreQueue = [];      // stats not yet reached by the delayed picture
+
+function releaseScoreboard(at) {
+  let latest = null;
+  while (scoreQueue.length && scoreQueue[0].clock <= at) latest = scoreQueue.shift();
+  if (latest) showScoreboard(latest);
+}
+
+function showScoreboard(next) {
+  const state = next.state;
+  const teams = next.teams || {};
+  const name = (team, fallback) => (team && team.colour_bn ? `${team.colour_bn} দল` : fallback);
+  $("nameA").textContent = name(teams.team_a, "দল ক");
+  $("nameB").textContent = name(teams.team_b, "দল খ");
+  $("labelA").textContent = name(teams.team_a, "Team A");
+  $("labelB").textContent = name(teams.team_b, "Team B");
+  for (const [team, ids] of [["team_a", ["kitA", "kitA2"]], ["team_b", ["kitB", "kitB2"]]]) {
+    const colour = teams[team]?.colour;
+    ids.forEach((id) => kit($(id), colour));
+    document.querySelectorAll(`select.colour[data-team=${team}]`).forEach((select) => {
+      if (colour && document.activeElement !== select) select.value = colour;
+    });
+  }
+  $("scoreA").textContent = bn(next.score.team_a);
+  $("scoreB").textContent = bn(next.score.team_b);
+  $("minute").textContent = state === "starting" ? "–" : bn(next.minute) + "'";
+  $("phase").textContent = {
+    play: "in play", before: "before kick-off", break: "break",
+    shootout: "shootout", full_time: "full time", hold: "on hold",
+  }[next.phase] || next.phase;
+
 }
 
 let lastShown = null;
@@ -377,26 +415,15 @@ function onStats(next) {
   $("start").disabled = running;
   $("stop").disabled = !running;
 
-  const teams = next.teams || {};
-  const name = (team, fallback) => (team && team.colour_bn ? `${team.colour_bn} দল` : fallback);
-  $("nameA").textContent = name(teams.team_a, "দল ক");
-  $("nameB").textContent = name(teams.team_b, "দল খ");
-  $("labelA").textContent = name(teams.team_a, "Team A");
-  $("labelB").textContent = name(teams.team_b, "Team B");
-  for (const [team, ids] of [["team_a", ["kitA", "kitA2"]], ["team_b", ["kitB", "kitB2"]]]) {
-    const colour = teams[team]?.colour;
-    ids.forEach((id) => kit($(id), colour));
-    document.querySelectorAll(`select.colour[data-team=${team}]`).forEach((select) => {
-      if (colour && document.activeElement !== select) select.value = colour;
-    });
+  // The score and the clock go with the picture: a page that shows the
+  // match 10 s late shows a goal 10 s late too, not when the button is pressed.
+  if (base !== null && next.clock !== undefined && Math.max(delay, JITTER) > 0.5) {
+    scoreQueue.push(next);
+    if (scoreQueue.length > 600) scoreQueue.splice(0, scoreQueue.length - 600);
+  } else {
+    scoreQueue.length = 0;
+    showScoreboard(next);
   }
-  $("scoreA").textContent = bn(next.score.team_a);
-  $("scoreB").textContent = bn(next.score.team_b);
-  $("minute").textContent = state === "starting" ? "–" : bn(next.minute) + "'";
-  $("phase").textContent = {
-    play: "in play", before: "before kick-off", break: "break",
-    shootout: "shootout", full_time: "full time", hold: "on hold",
-  }[next.phase] || next.phase;
 
   $("tRate").textContent = next.rate ? next.rate.toFixed(1) : "–";
   $("tRate").parentElement.classList.toggle("warn", next.rate > 0 && next.rate < 0.8 * next.target_rate);
@@ -418,6 +445,7 @@ function onStats(next) {
 function newSession(id) {
   sessionId = id;
   cams.forEach((cam) => { cam.frames = []; });
+  scoreQueue.length = 0;
   setCameras(null, 1);
   $("feedNote").hidden = true;
   base = null;
