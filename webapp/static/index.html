@@ -46,12 +46,72 @@
       <video id="finishedVideo" controls playsinline hidden></video>
       <div class="idle" id="idle">
         <p class="bn">ম্যাচ শুরুর অপেক্ষায়</p>
-        <p id="idleText">Choose a camera, a stream or a video below and press Start.</p>
+        <p id="idleText">Choose a camera, a stream or a video on the right and press Start.</p>
       </div>
       <button class="sound-on" id="soundOn" hidden>Turn sound on</button>
       <div class="badge" id="liveBadge" hidden><span></span><b id="liveText">LIVE</b><small id="lagText"></small></div>
       <div class="hold" id="hold" role="status" hidden></div>
       <div class="caption" id="caption" hidden><p class="bn" id="captionText"></p></div>
+      <div class="toast" id="toast" role="status" hidden></div>
+
+      <!-- Match control over the picture: each side opens and closes like a mini player. -->
+      <div class="ov ov-team ov-left op-only" data-team="team_a" data-open="true">
+        <button type="button" class="ov-toggle" aria-expanded="true" aria-controls="panelA">
+          <span class="kit" id="kitA2"></span><span class="ov-name" id="labelA">Team A</span>
+          <span class="chev" aria-hidden="true"></span>
+        </button>
+        <div class="ov-panel" id="panelA">
+          <div class="ov-buttons">
+            <button data-action="goal" class="goal">Goal</button>
+            <button data-action="yellow_card" class="yellow" data-say="Yellow card">Yellow</button>
+            <button data-action="red_card" class="red" data-say="Red card">Red</button>
+            <button data-action="corner_kick">Corner</button>
+            <button data-action="freekick">Free kick</button>
+            <button data-action="penalty">Penalty</button>
+            <button data-action="undo_goal" class="ghost" data-say="Goal taken back">Undo goal</button>
+          </div>
+          <label class="ov-colour">Kit
+            <select class="colour" data-team="team_a" aria-label="Kit colour of Team A"></select>
+          </label>
+        </div>
+      </div>
+      <div class="ov ov-team ov-right op-only" data-team="team_b" data-open="true">
+        <button type="button" class="ov-toggle" aria-expanded="true" aria-controls="panelB">
+          <span class="kit" id="kitB2"></span><span class="ov-name" id="labelB">Team B</span>
+          <span class="chev" aria-hidden="true"></span>
+        </button>
+        <div class="ov-panel" id="panelB">
+          <div class="ov-buttons">
+            <button data-action="goal" class="goal">Goal</button>
+            <button data-action="yellow_card" class="yellow" data-say="Yellow card">Yellow</button>
+            <button data-action="red_card" class="red" data-say="Red card">Red</button>
+            <button data-action="corner_kick">Corner</button>
+            <button data-action="freekick">Free kick</button>
+            <button data-action="penalty">Penalty</button>
+            <button data-action="undo_goal" class="ghost" data-say="Goal taken back">Undo goal</button>
+          </div>
+          <label class="ov-colour">Kit
+            <select class="colour" data-team="team_b" aria-label="Kit colour of Team B"></select>
+          </label>
+        </div>
+      </div>
+      <div class="ov ov-clock op-only" data-open="false">
+        <button type="button" class="ov-toggle" aria-expanded="false" aria-controls="panelClock">
+          <span class="ov-name">Match clock</span><span class="chev" aria-hidden="true"></span>
+        </button>
+        <div class="ov-panel" id="panelClock">
+          <div class="ov-buttons">
+            <button data-action="kickoff">Kick-off</button>
+            <button data-action="half_time">Half-time</button>
+            <button data-action="second_half">Second half</button>
+            <button data-action="shootout">Shootout</button>
+            <button data-action="full_time">Full time</button>
+            <button data-action="pause">Pause</button>
+            <button data-action="resume">Resume</button>
+          </div>
+        </div>
+      </div>
+      <button type="button" class="ov-full" id="fullscreen" title="Full screen" aria-label="Full screen" hidden></button>
     </div>
 
     <div class="tiles" id="tiles">
@@ -62,24 +122,29 @@
       <div><small>Crowd roars</small><b id="tRoars">–</b></div>
       <div><small>Frames skipped</small><b id="tDropped">–</b></div>
     </div>
+  </section>
 
-    <div class="viewer-controls">
-      <label>Picture delay <output id="delayOut">10 s</output>
-        <input type="range" id="delay" min="0" max="40" step="1" value="10">
-      </label>
-      <label>Match sound
-        <input type="range" id="matchVolume" min="0" max="100" value="35">
-      </label>
-      <label>Commentary voice
-        <input type="range" id="voiceVolume" min="0" max="100" value="100">
-      </label>
-    </div>
-    <p class="hint">The picture is shown a few seconds late so each line lands on the moment it describes. A goal is only known after the celebration (about 25 s), so set the delay to 30 s if goals should be called on time.</p>
+  <aside class="side-col">
+    <section class="feed-box">
+      <div class="feed-head">
+        <h2>ধারাভাষ্য</h2>
+        <span id="lineCount">0 lines</span>
+      </div>
+      <p class="feed-note" id="feedNote" hidden>These lines are from the last match. It has ended: nothing is being said now.</p>
+      <ol class="feed" id="feed" aria-live="polite"></ol>
+      <p class="empty" id="feedEmpty">Lines appear here as the match is played.</p>
+      <ul class="notes" id="notes"></ul>
+    </section>
 
-    <section class="control" id="control" hidden>
-      <div class="panel">
-        <h2>Match feed</h2>
-        <div class="tabs" role="tablist">
+    <section class="setup" id="control">
+      <div class="panel-tabs" role="tablist" aria-label="Set-up">
+        <button role="tab" class="op-only" data-panel="source" aria-selected="true">Match feed</button>
+        <button role="tab" class="op-only" data-panel="settings" aria-selected="false">Settings</button>
+        <button role="tab" data-panel="view" aria-selected="false">Picture and sound</button>
+      </div>
+
+      <div class="panel-body op-only" data-panel-body="source">
+        <div class="tabs" role="tablist" aria-label="Kind of match feed">
           <button role="tab" data-kind="camera" aria-selected="true">Camera</button>
           <button role="tab" data-kind="url" aria-selected="false">Stream</button>
           <button role="tab" data-kind="file" aria-selected="false">Video</button>
@@ -94,31 +159,30 @@
           <div class="cameras" id="cameras">
             <div class="camera-slot" data-slot="1">
               <h3>Camera 1 <small>the commentary comes from this one</small></h3>
-              <select class="device" aria-label="Device for camera 1"></select>
+              <div class="slot-row">
+                <select class="device" aria-label="Device for camera 1"></select>
+                <button type="button" class="ghost look">Show</button>
+              </div>
               <input type="text" class="address" placeholder="rtsp://192.168.0.10:8554/match"
                 aria-label="Address of camera 1" hidden>
-              <div class="preview">
-                <button type="button" class="ghost look">Show its picture</button>
-                <img alt="Picture from camera 1" hidden>
-              </div>
+              <img alt="Picture from camera 1" hidden>
             </div>
             <button type="button" id="swapCameras" hidden>⇄ Swap camera 1 and camera 2</button>
             <div class="camera-slot" data-slot="2" hidden>
               <h3>Camera 2 <small>shown beside camera 1</small></h3>
-              <select class="device" aria-label="Device for camera 2"></select>
+              <div class="slot-row">
+                <select class="device" aria-label="Device for camera 2"></select>
+                <button type="button" class="ghost look">Show</button>
+              </div>
               <input type="text" class="address" placeholder="rtsp://192.168.0.11:8554/match"
                 aria-label="Address of camera 2" hidden>
-              <div class="preview">
-                <button type="button" class="ghost look">Show its picture</button>
-                <img alt="Picture from camera 2" hidden>
-              </div>
+              <img alt="Picture from camera 2" hidden>
             </div>
           </div>
           <div class="buttons">
             <button type="button" class="ghost" id="refreshCameras">Look for cameras again</button>
             <a class="button ghost" id="cameraPage" href="camera.html">Use this device as a camera</a>
           </div>
-          <p class="hint">Choose the device for each camera yourself; "Show its picture" tells you which is which. A phone becomes a camera from its camera page (in the iPhone app, or in its browser when the server runs with --https) and then appears in these lists.</p>
           <label>Microphone (for whistle and crowd)
             <input type="text" id="mic" list="mics" placeholder="leave empty for no sound">
             <datalist id="mics"></datalist>
@@ -136,6 +200,9 @@
           <label class="check"><input type="checkbox" id="realtime" checked> Play at match speed (skip frames if this PC is slow)</label>
           <button class="ghost" id="playFinished" hidden>Play the finished commentary of this video</button>
         </div>
+      </div>
+
+      <div class="panel-body op-only" data-panel-body="settings" hidden>
         <div class="row">
           <label>Voice
             <select id="voice">
@@ -169,67 +236,32 @@
           </select>
         </label>
         <label class="check"><input type="checkbox" id="boxes" checked> Draw players and ball on the picture</label>
-        <p class="hint share" id="share" hidden></p>
-        <div class="actions">
-          <button class="primary" id="start">Start</button>
-          <button class="danger" id="stop" disabled>Stop</button>
-          <span class="error" id="error" role="alert"></span>
+        <div class="row">
+          <label>Kit colour, team A <select class="colour" data-team="team_a"></select></label>
+          <label>Kit colour, team B <select class="colour" data-team="team_b"></select></label>
         </div>
+        <p class="hint share" id="share" hidden></p>
       </div>
 
-      <div class="panel">
-        <h2>Match control</h2>
-        <p class="hint">The clock, and what one camera cannot see. Each button is said in Bengali straight away.</p>
-        <div class="buttons">
-          <button data-action="kickoff">Kick-off</button>
-          <button data-action="half_time">Half-time</button>
-          <button data-action="second_half">Second half</button>
-          <button data-action="shootout">Penalty shootout</button>
-          <button data-action="full_time">Full time</button>
-          <button data-action="pause">Pause commentary</button>
-          <button data-action="resume">Resume</button>
-        </div>
-        <div class="team-controls">
-          <div class="team-box" data-team="team_a">
-            <h3><span class="kit" id="kitA2"></span><span id="labelA">Team A</span>
-              <select class="colour" data-team="team_a" aria-label="Kit colour of team A"></select></h3>
-            <div class="buttons">
-              <button data-action="goal" class="goal">Goal</button>
-              <button data-action="yellow_card" class="yellow">Yellow</button>
-              <button data-action="red_card" class="red">Red</button>
-              <button data-action="corner_kick">Corner</button>
-              <button data-action="freekick">Free kick</button>
-              <button data-action="penalty">Penalty</button>
-              <button data-action="undo_goal" class="ghost">Take a goal back</button>
-            </div>
-          </div>
-          <div class="team-box" data-team="team_b">
-            <h3><span class="kit" id="kitB2"></span><span id="labelB">Team B</span>
-              <select class="colour" data-team="team_b" aria-label="Kit colour of team B"></select></h3>
-            <div class="buttons">
-              <button data-action="goal" class="goal">Goal</button>
-              <button data-action="yellow_card" class="yellow">Yellow</button>
-              <button data-action="red_card" class="red">Red</button>
-              <button data-action="corner_kick">Corner</button>
-              <button data-action="freekick">Free kick</button>
-              <button data-action="penalty">Penalty</button>
-              <button data-action="undo_goal" class="ghost">Take a goal back</button>
-            </div>
-          </div>
-        </div>
+      <div class="panel-body" data-panel-body="view" hidden>
+        <label>Picture delay <output id="delayOut">10 s</output>
+          <input type="range" id="delay" min="0" max="40" step="1" value="10">
+        </label>
+        <p class="hint" id="delayHint">The picture is shown a few seconds late so each line lands on the moment it describes. A goal is only known after the celebration (about 25 s): set 30 s if goals should be called on time.</p>
+        <label>Match sound
+          <input type="range" id="matchVolume" min="0" max="100" value="35">
+        </label>
+        <label>Commentary voice
+          <input type="range" id="voiceVolume" min="0" max="100" value="100">
+        </label>
+      </div>
+
+      <div class="actions op-only">
+        <button class="primary" id="start">Start</button>
+        <button class="danger" id="stop" disabled>Stop</button>
+        <span class="error" id="error" role="alert"></span>
       </div>
     </section>
-  </section>
-
-  <aside class="feed-col">
-    <div class="feed-head">
-      <h2>ধারাভাষ্য</h2>
-      <span id="lineCount">0 lines</span>
-    </div>
-    <p class="feed-note" id="feedNote" hidden>These lines are from the last match. It has ended: nothing is being said now.</p>
-    <ol class="feed" id="feed" aria-live="polite"></ol>
-    <p class="empty" id="feedEmpty">Lines appear here as the match is played.</p>
-    <ul class="notes" id="notes"></ul>
   </aside>
 </main>
 

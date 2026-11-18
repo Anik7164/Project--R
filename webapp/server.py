@@ -54,6 +54,11 @@ VIDEO_TYPES = {".mp4", ".mov", ".mkv", ".avi", ".webm", ".m4v"}
 @asynccontextmanager
 async def lifespan(_):
     hub.loop = asyncio.get_running_loop()
+    if hub.warm:
+        # The models load now, so Start opens the camera and talks at once.
+        from live_engine import warm_up_in_background
+
+        warm_up_in_background()
     yield
     if hub.match is not None:
         hub.match.stop()
@@ -80,6 +85,7 @@ class Hub:
         self.key = None    # operator key; None: anyone who can open the page
         self.phones = {}   # id -> PushFeed: devices sending their camera in
         self.share = None  # {"address", "key"}: what a phone on the Wi-Fi types to join
+        self.warm = False  # load the models when the server starts (main() sets it)
 
     def _deliver(self, item):
         for client in list(self.clients):
@@ -572,7 +578,10 @@ def main():
     parser.add_argument("--https", action="store_true",
                         help="for a phone browser that is to be a camera "
                              "(needs: pip install cryptography)")
+    parser.add_argument("--no-preload", action="store_true",
+                        help="load the models at the first Start, not when the server starts")
     args = parser.parse_args()
+    hub.warm = not args.no_preload
 
     local = args.host in ("127.0.0.1", "localhost", "::1")
     scheme, secure = ("https", {}) if args.https else ("http", {})

@@ -75,7 +75,13 @@ MAX_TEAM_SAMPLES = 3000  # frames of kit samples kept (about 10 min)
 STREAM_WIDTH = 960       # picture sent to the browsers
 STREAM_QUALITY = 70
 SECOND_WIDTH = 640       # ... of camera 2
-SECOND_FPS = 6.0
+SECOND_FPS = 12.0
+# The picture the browsers show is sent at the camera's own pace, apart
+# from the analysis: a slow GPU makes the commentary later, not the
+# picture choppy. The boxes drawn on it are those of the newest analysed
+# frame, if it is this recent.
+DISPLAY_FPS = 20.0
+BOXES_KEEP_SECONDS = 0.6
 FIRST_PICTURE_SECONDS = 20.0   # a camera that opens but shows nothing by then has failed
 LOST_SECONDS = {"camera": 10.0, "url": 20.0, "phone": 45.0}   # ... and one that goes quiet
 
@@ -130,9 +136,15 @@ class FrameSource(threading.Thread):
     or every sampled frame is handed out however long the work takes
     (realtime False: for testing on a slow machine)."""
 
-    def __init__(self, spec, process_fps, realtime=True):
+    def __init__(self, spec, process_fps, realtime=True, on_picture=None,
+                 display_fps=DISPLAY_FPS):
         super().__init__(daemon=True)
         self.spec, self.process_fps, self.realtime = spec, process_fps, realtime
+        # on_picture(seconds, frame): every picture to show, up to display_fps,
+        # whether or not it is analysed (only when the source is live or real time).
+        self.on_picture = on_picture if (spec["kind"] in ("camera", "url", "phone")
+                                         or realtime) else None
+        self.display_step = 1.0 / display_fps
         self.live = spec["kind"] in ("camera", "url", "phone")
         self.drop = self.live or realtime
         self.cond = threading.Condition()
@@ -153,8 +165,14 @@ class FrameSource(threading.Thread):
             index = int(self.spec.get("index", 0))
             capture = (cv2.VideoCapture(index, cv2.CAP_DSHOW)
                        if sys.platform == "win32" else cv2.VideoCapture(index))
+            # MJPG first: most USB webcams give 1280x720 uncompressed at only
+            # 5 to 10 frames a second, compressed at 30. One frame of buffer:
+            # the newest picture, not one from a second ago.
+            capture.set(cv2.CAP_PROP_FOURCC, cv2.VideoWriter_fourcc(*"MJPG"))
             capture.set(cv2.CAP_PROP_FRAME_WIDTH, 1280)
             capture.set(cv2.CAP_PROP_FRAME_HEIGHT, 720)
+            capture.set(cv2.CAP_PROP_FPS, 30)
+            capture.set(cv2.CAP_PROP_BUFFERSIZE, 1)
         elif kind == "url":
             capture = cv2.VideoCapture(self.spec["url"])
         else:
@@ -207,6 +225,7 @@ class FrameSource(threading.Thread):
             capture = self._open()
             step = 1.0 / self.process_fps
             start, next_at = time.monotonic(), 0.0
+            next_show = 0.0
             if self.live:
                 limit = LOST_SECONDS[self.spec["kind"]]
                 last_ok = time.monotonic()
@@ -220,6 +239,9 @@ class FrameSource(threading.Thread):
                         continue
                     last_ok = time.monotonic()
                     at = time.monotonic() - start
+                    if self.on_picture is not None and at >= next_show:
+                        next_show = max(next_show + self.display_step, at)
+                        self.on_picture(at, frame)
                     if at < next_at:
                         continue
                     next_at = max(next_at + step, at)
@@ -236,22 +258,29 @@ class FrameSource(threading.Thread):
                     index = int(start_at * fps)
                     capture.set(cv2.CAP_PROP_POS_FRAMES, index)
                     next_at = index / fps
+                next_show = next_at
                 while not self.stopping.is_set():
                     at = index / fps
                     index += 1
-                    if at + 1e-6 < next_at:
+                    analyse = at + 1e-6 >= next_at
+                    show = self.on_picture is not None and at + 1e-6 >= next_show
+                    if not analyse and not show:
                         if not capture.grab():
                             break
                         continue
                     ok, frame = capture.read()
                     if not ok:
                         break
-                    next_at += step
                     if self.realtime:
                         wait = start + (at - start_at) - time.monotonic()
                         if wait > 0 and self.stopping.wait(wait):
                             break
-                    self._offer((at, frame))
+                    if show:
+                        next_show += self.display_step
+                        self.on_picture(at, frame)
+                    if analyse:
+                        next_at += step
+                        self._offer((at, frame))
         except Exception as error:  # shown in the browser
             self.error = str(error)
         finally:
@@ -535,6 +564,65 @@ class _CameraRecorder:
 
 
 # ----------------------------------------------------------------------
+# Models, loaded once
+# ----------------------------------------------------------------------
+
+_WARM = {"lock": threading.Lock(), "parts": None, "error": None}
+
+
+def warm_up(reid=True):
+    """What is slow to load and keeps no state between matches, loaded
+    once per server: torch and the GPU, the ball model (first run
+    included, so the GPU code is ready), the ReID network. The server
+    calls it when it starts, so pressing Start does not wait for it.
+    Returns the parts; a second caller waits for the first."""
+    with _WARM["lock"]:
+        parts = _WARM["parts"]
+        if parts is not None and (parts["reid"] is not None or not reid
+                                  or parts["reid_tried"]):
+            return parts
+        import torch
+        from ultralytics import YOLO
+
+        from detector_classes import ball_class, default_model
+
+        if parts is None:
+            device = 0 if torch.cuda.is_available() else "cpu"
+            path = default_model()
+            ball_model = YOLO(str(path))
+            ball_id = ball_class(ball_model)
+            # One look at an empty picture: the GPU sets itself up now, not
+            # on the first frame of the match.
+            blank = np.zeros((720, 1280, 3), dtype=np.uint8)
+            ball_model.predict(blank, classes=[ball_id], imgsz=1280, device=device, verbose=False)
+            parts = {"device": device, "path": path, "ball_model": ball_model,
+                     "ball_id": ball_id, "reid": None, "reid_tried": False}
+        if reid and not parts["reid_tried"]:
+            from reid import load_default as load_reid
+
+            parts["reid"] = load_reid("cuda:0" if parts["device"] == 0 else "cpu")
+            parts["reid_tried"] = True
+        _WARM["parts"] = parts
+        return parts
+
+
+def warm_up_in_background():
+    def run():
+        try:
+            warm_up(DEFAULTS["reid"])
+            print("[live] models ready")
+        except Exception as error:     # the match's own start reports it
+            _WARM["error"] = f"{type(error).__name__}: {error}"
+            print("[live] could not load the models yet:", _WARM["error"])
+
+    threading.Thread(target=run, daemon=True).start()
+
+
+def models_ready():
+    return _WARM["parts"] is not None
+
+
+# ----------------------------------------------------------------------
 # Speech
 # ----------------------------------------------------------------------
 
@@ -691,6 +779,12 @@ class LiveMatch:
         self.blind = []               # [start, end or None]: nothing said about these
         self.second = None
         self.second_error = None
+        # The picture shown (DISPLAY_FPS) apart from the one analysed.
+        self.display_cond = threading.Condition()
+        self.display_item = None
+        self.display_live = False
+        self.shown_at = 0.0
+        self.overlay = (None, [], None)   # (seconds, rows, ball) of the newest analysed frame
         self.clock = 0.0              # seconds of match seen so far
         self.started_wall = time.time()
 
@@ -759,21 +853,30 @@ class LiveMatch:
     def _run(self):
         analyser = None
         try:
-            self._status("Loading the models (the first start takes a while)")
-            self._load_models()
+            # The camera first: its picture is on the page while the models
+            # load (commentary starts when they are ready).
             self.source = FrameSource({**self.spec, "start": self.settings["start"]},
-                                      self.fps, bool(self.settings["realtime"]))
+                                      self.fps, bool(self.settings["realtime"]),
+                                      on_picture=self._show)
+            self.display_live = self.source.on_picture is not None
+            name = self.source.describe()
+            self._status(f"Opening {name}")
             self.source.start()
+            if self.display_live:
+                threading.Thread(target=self._display_loop, daemon=True).start()
+            if self.second_spec is not None:
+                threading.Thread(target=self._second_loop, daemon=True).start()
             self._start_sound()
+            if not models_ready():
+                self._status(f"{name} is on. Loading the models: commentary starts in a moment "
+                             "(the first start after switching on the PC takes longest)")
+            self._load_models_watching_the_camera()
             self.speaker = Speaker(self.settings["voice"], self.settings["speaker"],
                                    self.folder / "audio", self._spoken, self.note)
             self.speaker.start()
             analyser = threading.Thread(target=self._analyse_loop, daemon=True)
             analyser.start()
-            if self.second_spec is not None:
-                threading.Thread(target=self._second_loop, daemon=True).start()
             # "Live" is only said once a picture has really arrived and been looked at.
-            name = self.source.describe()
             self._status(f"Waiting for the picture from {name}")
             waiting_since = time.monotonic()
 
@@ -813,8 +916,11 @@ class LiveMatch:
                 self._tick(final=True)
                 self._status("The match feed ended", "ended")
         except Exception as error:
-            traceback.print_exc()
-            self._status(f"Stopped: {error}", "failed")
+            if self.cut:                    # Stop pressed while the models were loading
+                self._status("Stopped", "ended")
+            else:
+                traceback.print_exc()
+                self._status(f"Stopped: {error}", "failed")
         finally:
             self.stopping.set()
             if self.source is not None:
@@ -834,26 +940,46 @@ class LiveMatch:
             self.save()
             self.publish_json(self.stats())
 
+    def _load_models_watching_the_camera(self):
+        """_load_models, but a camera that fails meanwhile is said at once."""
+        failed = []
+
+        def load():
+            try:
+                self._load_models()
+            except Exception as error:
+                failed.append(error)
+
+        loader = threading.Thread(target=load, daemon=True)
+        loader.start()
+        while loader.is_alive():
+            loader.join(0.2)
+            if self.source.ended and self.source.error:
+                raise RuntimeError(self.source.error)
+            if self.stopping.is_set():
+                raise RuntimeError("stopped while loading")
+        if failed:
+            raise failed[0]
+
     def _load_models(self):
-        import torch
         from ultralytics import YOLO
 
         import ball_tracking
         import track_players
-        from detector_classes import ball_class, default_model, is_football_model, people_classes
+        from detector_classes import is_football_model, people_classes
         from identity import StablePlayerTracker, overlaps_other
-        from reid import load_default as load_reid
 
+        warm = warm_up(bool(self.settings["reid"]))
         self.tp, self.bt, self.overlaps_other = track_players, ball_tracking, overlaps_other
-        self.device = 0 if torch.cuda.is_available() else "cpu"
+        self.device = warm["device"]
         if self.device == "cpu":
             self.note("No GPU found: running on the CPU, far slower than the match.")
-        path = default_model()
+        path = warm["path"]
         coco_path = ROOT / "yolo26n.pt"
         want = self.settings["people_model"]
+        # The people model keeps the tracker's state, so each match gets its own.
         main = YOLO(str(path))
-        self.ball_model = YOLO(str(path))
-        self.ball_id = ball_class(self.ball_model)
+        self.ball_model, self.ball_id = warm["ball_model"], warm["ball_id"]
         self.coco = None
         self.probe = None
         if want == "coco" and coco_path.exists():
@@ -865,9 +991,7 @@ class LiveMatch:
         self.people_model = main
         self.people_classes = people_classes(main)
         self.people_classes_fn = people_classes
-        reid = None
-        if self.settings["reid"]:
-            reid = load_reid("cuda:0" if self.device == 0 else "cpu")
+        reid = warm["reid"] if self.settings["reid"] else None
         self.stable = StablePlayerTracker(reid=reid)
         self.stable.camera = _CameraRecorder(self.stable.camera)
         self.delay = self.stable.identity.config.pending_timeout + 2
@@ -981,7 +1105,41 @@ class LiveMatch:
                          ball is not None)
         self.frames_done += 1
         self.clock = at
-        self._send_picture(at, frame, rows, ball)
+        if self.display_live:
+            self.overlay = (at, rows, ball)   # drawn on the pictures shown next
+        else:
+            self._send_picture(at, frame, rows, ball)
+
+    # -- the picture shown -----------------------------------------------
+
+    def _show(self, at, frame):
+        """From the camera's thread: the newest picture to show."""
+        with self.display_cond:
+            self.display_item = (at, frame)
+            self.display_cond.notify()
+
+    def _display_loop(self):
+        """Sends the camera's picture to the browsers as it comes, from the
+        moment the camera opens: also while the models load, and however
+        slow the analysis is."""
+        seen = None
+        while not self.stopping.is_set():
+            with self.display_cond:
+                if self.display_item is seen:
+                    self.display_cond.wait(0.5)
+                item = self.display_item
+            if item is None or item is seen:
+                continue
+            seen = item
+            at, frame = item
+            boxes_at, rows, ball = self.overlay
+            if boxes_at is None or abs(at - boxes_at) > BOXES_KEEP_SECONDS:
+                rows, ball = [], None
+            self.shown_at = at
+            try:
+                self._send_picture(at, frame, rows, ball)
+            except Exception as error:     # one bad picture must not stop the rest
+                print("[live] a picture could not be sent:", error)
 
     # -- camera 2 ------------------------------------------------------
 
@@ -1004,7 +1162,8 @@ class LiveMatch:
             ok, jpeg = cv2.imencode(".jpg", frame, [cv2.IMWRITE_JPEG_QUALITY, STREAM_QUALITY])
             if ok:
                 # On camera 1's clock, so the browsers show both equally late.
-                self.publish_bytes(b"\x03" + struct.pack("<d", self.clock) + jpeg.tobytes())
+                now = self.shown_at if self.display_live else self.clock
+                self.publish_bytes(b"\x03" + struct.pack("<d", now) + jpeg.tobytes())
         if not self.stopping.is_set():
             self.second_error = self.second.error or "it stopped sending pictures"
             self.note(f"Camera 2 ({name}) stopped: {self.second_error} "
@@ -1561,7 +1720,9 @@ class LiveMatch:
             "realtime": bool(self.settings["realtime"]),
             # Why nothing is said just now ("" while a match is in the picture).
             "picture": self.picture,
-            "hold": HOLD.get(self.picture, "") if self.state == "running" else "",
+            "hold": (HOLD.get(self.picture, "") if self.state == "running"
+                     else self.message if self.state == "starting" and self.source else ""),
+            "models_ready": models_ready(),
             # Stopped by hand or broken: the browsers drop what they still held back.
             "cut": self.cut or self.state == "failed",
             "second": None if self.second_spec is None else {

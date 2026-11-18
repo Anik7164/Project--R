@@ -50,7 +50,12 @@ function showError(error) {
 
 // ---------------------------------------------------------------- timing
 
-let delay = Number(localStorage.getItem("delay") ?? 10);
+// The operator sees the match as it happens (they press the buttons on
+// time); viewers see it late, with each line on its moment. Each keeps
+// their own setting.
+const JITTER = 0.4;         // seconds always held back: smooth pictures over Wi-Fi
+const delayKey = () => (operator ? "delay operator" : "delay");
+let delay = 10;
 let base = null;            // performance seconds at match second 0, delay included
 let frames = [];            // {t, blob}, oldest first
 let frames2 = [];           // camera 2, the same
@@ -62,7 +67,7 @@ const playhead = () => (base === null ? -1 : nowSeconds() - base);
 function retime(t) {
   // Keep the picture `delay` seconds behind what arrives. A jump (start,
   // a slow PC working through a video, a sleeping tab) moves the clock.
-  const target = t - delay;
+  const target = t - Math.max(delay, JITTER);
   if (base === null || Math.abs(playhead() - target) > 1.5) {
     base = nowSeconds() - target;
     audioBase = null;
@@ -344,8 +349,9 @@ function onStats(next) {
   for (const [team, ids] of [["team_a", ["kitA", "kitA2"]], ["team_b", ["kitB", "kitB2"]]]) {
     const colour = teams[team]?.colour;
     ids.forEach((id) => kit($(id), colour));
-    const select = document.querySelector(`select.colour[data-team=${team}]`);
-    if (select && colour && document.activeElement !== select) select.value = colour;
+    document.querySelectorAll(`select.colour[data-team=${team}]`).forEach((select) => {
+      if (colour && document.activeElement !== select) select.value = colour;
+    });
   }
   $("scoreA").textContent = bn(next.score.team_a);
   $("scoreB").textContent = bn(next.score.team_b);
@@ -391,7 +397,65 @@ function onNote(text) {
 function onStatus(message) {
   $("status").className = `status ${message.state}`;
   $("statusText").textContent = message.message;
-  if (message.state === "starting") $("idleText").textContent = message.message + "…";
+  if (message.state === "starting") {
+    $("idleText").textContent = message.message + "…";
+    // The camera's picture shows while the models load: say why nothing is said yet.
+    $("hold").hidden = false;
+    $("hold").textContent = message.message;
+  }
+}
+
+// ---------------------------------------------------------------- over the picture
+
+let toastTimer = null;
+function toast(text) {
+  $("toast").textContent = text;
+  $("toast").hidden = false;
+  clearTimeout(toastTimer);
+  toastTimer = setTimeout(() => { $("toast").hidden = true; }, 1800);
+}
+
+// A side of the match control opens and closes like a mini player; each
+// remembers how it was left.
+function setOverlay(box, open) {
+  box.dataset.open = String(open);
+  box.querySelector(".ov-toggle").setAttribute("aria-expanded", String(open));
+  if (box.classList.contains("ov-clock")) $("stage").classList.toggle("clock-open", open);
+}
+
+function wireOverlays() {
+  const narrow = window.matchMedia("(max-width: 700px)").matches;
+  document.querySelectorAll(".ov").forEach((box, number) => {
+    const name = `overlay ${number}`;
+    const saved = remembered(name);
+    setOverlay(box, saved === null ? (!narrow && !box.classList.contains("ov-clock")) : saved === "1");
+    box.querySelector(".ov-toggle").onclick = () => {
+      const open = box.dataset.open !== "true";
+      setOverlay(box, open);
+      remember(name, open ? "1" : "0");
+    };
+  });
+  // Full screen: the buttons stay on the picture.
+  const stage = $("stage");
+  if (stage.requestFullscreen) {
+    $("fullscreen").hidden = false;
+    $("fullscreen").onclick = () => {
+      if (document.fullscreenElement) document.exitFullscreen().catch(() => {});
+      else stage.requestFullscreen().catch(() => {});
+    };
+    document.addEventListener("fullscreenchange", () => {
+      $("fullscreen").classList.toggle("on", document.fullscreenElement === stage);
+    });
+  }
+}
+
+function choosePanel(name) {
+  document.querySelectorAll(".panel-tabs button").forEach((button) => {
+    button.setAttribute("aria-selected", String(button.dataset.panel === name));
+  });
+  document.querySelectorAll("[data-panel-body]").forEach((body) => {
+    body.hidden = body.dataset.panelBody !== name;
+  });
 }
 
 // ---------------------------------------------------------------- socket
@@ -649,7 +713,7 @@ async function lookAtCamera(slot) {
   const { image } = slotParts(slot);
   const button = slot.querySelector(".look");
   button.disabled = true;
-  button.textContent = "Opening the camera…";
+  button.textContent = "Opening…";
   try {
     const picture = await api("/api/camera/preview", cameraSource(slot));
     clearPreview(slot);
@@ -660,7 +724,7 @@ async function lookAtCamera(slot) {
     showError(error);
   } finally {
     button.disabled = false;
-    button.textContent = "Show its picture";
+    button.textContent = "Show";
   }
 }
 
@@ -749,24 +813,37 @@ function wire() {
     };
   }
 
-  document.querySelectorAll("#control [data-action]").forEach((button) => {
-    button.onclick = () => {
+  document.querySelectorAll(".ov [data-action]").forEach((button) => {
+    button.onclick = async () => {
       showError();
-      const team = button.closest("[data-team]")?.dataset.team;
-      api("/api/operator", { action: button.dataset.action, team }).catch(showError);
+      const box = button.closest("[data-team]");
+      const team = box?.dataset.team;
+      const who = box ? box.querySelector(".ov-name").textContent + ": " : "";
+      button.disabled = true;
+      try {
+        await api("/api/operator", { action: button.dataset.action, team });
+        toast(`${who}${button.dataset.say || button.textContent}`);
+      } catch (error) {
+        toast(error.message || String(error));
+        showError(error);
+      } finally {
+        button.disabled = false;
+      }
     };
   });
+  document.querySelectorAll(".panel-tabs button").forEach((button) => {
+    button.onclick = () => choosePanel(button.dataset.panel);
+  });
+  wireOverlays();
   document.querySelectorAll("select.colour").forEach((select) => {
     select.onchange = () => api("/api/operator", {
       action: "colour", team: select.dataset.team, colour: select.value,
     }).catch(showError);
   });
 
-  $("delay").value = delay;
-  $("delayOut").textContent = `${delay} s`;
   $("delay").oninput = (event) => {
     delay = Number(event.target.value);
-    localStorage.setItem("delay", delay);
+    remember(delayKey(), String(delay));
     $("delayOut").textContent = `${delay} s`;
     if (frames.length || newest) { base = null; retime(newest); }
     if (stats) $("lagText").textContent = delay ? `${delay} s behind` : "";
@@ -775,7 +852,15 @@ function wire() {
   $("voiceVolume").oninput = (event) => { if (speaking) speaking.volume = event.target.value / 100; };
 }
 
+// The page is one screen high: the header's height is taken off.
+function fitHeader() {
+  const header = document.querySelector(".top");
+  if (header) document.documentElement.style.setProperty("--top", `${header.offsetHeight}px`);
+}
+
 async function boot() {
+  fitHeader();
+  window.addEventListener("resize", fitHeader);
   wire();
   await findServer();               // the iPhone app asks for the PC's address
   showServer($("serverName"));
@@ -783,7 +868,16 @@ async function boot() {
     const state = await api("/api/state");
     operator = state.operator;
     colours = state.colours;
-    $("control").hidden = !operator;
+    document.body.classList.toggle("viewer", !operator);
+    if (!operator) choosePanel("view");
+    delay = Number(remembered(delayKey()) ?? (operator ? 0 : 10));
+    $("delay").value = delay;
+    $("delayOut").textContent = `${delay} s`;
+    if (operator) {
+      $("delayHint").textContent = "You see the match as it happens, so the buttons are pressed on time. " +
+        "Lines come a few seconds after their moment. Viewers on other devices see it 10 s late, " +
+        "with each line on its moment.";
+    }
     document.querySelectorAll("select.colour").forEach((select) => {
       select.replaceChildren(...Object.entries(colours).map(([name, bengali]) => {
         const option = document.createElement("option");

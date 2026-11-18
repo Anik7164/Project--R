@@ -488,3 +488,54 @@ def test_https_certificate_is_made_once_for_this_pc(tmp_path):
     first = cert.read_bytes()
     assert server.certificate("192.168.0.5", tmp_path)[0].read_bytes() == first
     assert server.certificate("192.168.0.9", tmp_path)[0].read_bytes() != first
+
+
+def test_the_picture_is_shown_at_its_own_pace_not_the_analysis_pace(tmp_path):
+    import cv2
+
+    path = tmp_path / "clip.avi"
+    writer = cv2.VideoWriter(str(path), cv2.VideoWriter_fourcc(*"MJPG"), 20.0, (64, 48))
+    for i in range(20):                     # 1 s at 20 frames a second
+        writer.write(np.full((48, 64, 3), i * 10, dtype=np.uint8))
+    writer.release()
+    shown = []
+    source = FrameSource({"kind": "file", "path": path}, process_fps=4.0, realtime=True,
+                         on_picture=lambda at, frame: shown.append(round(at, 2)),
+                         display_fps=20.0)
+    source.start()
+    analysed = []
+    while True:
+        item = source.get(timeout=1.0)
+        if item is None:
+            if source.ended:
+                break
+            continue
+        analysed.append(round(item[0], 2))
+    assert analysed == [0.0, 0.25, 0.5, 0.75]
+    assert len(shown) == 20 and shown[:3] == [0.0, 0.05, 0.1]
+
+
+def test_the_camera_picture_is_sent_while_the_models_are_still_loading(monkeypatch):
+    import threading
+
+    from live_engine import PushFeed
+
+    import cv2
+
+    feed = PushFeed("pitch side")
+    pictures, loading = [], threading.Event()
+    match = LiveMatch({"kind": "phone", "feed": feed}, {"voice": "off"},
+                      lambda message: None, pictures.append)
+    monkeypatch.setattr(match, "_load_models", lambda: loading.wait(10))
+    match.start()
+    ok, jpeg = cv2.imencode(".jpg", np.full((90, 160, 3), 120, dtype=np.uint8))
+    for _ in range(20):
+        feed.push(jpeg.tobytes())
+        if pictures:
+            break
+        threading.Event().wait(0.1)
+    assert pictures and pictures[0][:1] == b"\x01"     # on its way before any analysis
+    assert match.state == "starting" and match.frames_done == 0
+    assert "Loading the models" in match.message or "Opening" in match.message
+    match.stop()
+    loading.set()

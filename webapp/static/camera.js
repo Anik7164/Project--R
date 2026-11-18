@@ -6,7 +6,7 @@
 // (SERVER, key and friends: common.js.)
 
 const $ = (id) => document.getElementById(id);
-const SEND_RATE = 12;                 // pictures a second, what the PC analyses
+const SEND_RATE = 15;                 // pictures a second: the PC analyses up to 12 and shows them all
 const WAITING_LIMIT = 1_500_000;      // bytes not sent yet: skip pictures, do not queue them
 
 let stream = null;
