@@ -1,7 +1,9 @@
 """
 Live commentary engine: one camera (or stream, or a video played as if
 live) in, Bengali commentary lines and speech out, while the match runs.
-A second camera can be shown beside it; the lines come from camera 1.
+Up to two more cameras can be shown beside it, and the operator chooses
+which one is on air (what viewers and a stream see); the lines come from
+camera 1.
 
 Nothing is said unless a match is in the picture: no line while the
 camera sends no frames, a black or frozen picture, or fewer people than
@@ -74,8 +76,12 @@ TEAM_SAMPLE_PER_SECOND = 5.0
 MAX_TEAM_SAMPLES = 3000  # frames of kit samples kept (about 10 min)
 STREAM_WIDTH = 960       # picture sent to the browsers
 STREAM_QUALITY = 70
-SECOND_WIDTH = 640       # ... of camera 2
-SECOND_FPS = 12.0
+OTHER_WIDTH = 960        # ... of cameras 2 and 3 (one of them may be on air)
+OTHER_FPS = 15.0
+MAX_CAMERAS = 3
+# The first byte of a picture message: which camera it is from.
+PICTURE_KIND = {1: 1, 2: 3, 3: 4}
+CAMERA_OF_KIND = {kind: number for number, kind in PICTURE_KIND.items()}
 # The picture the browsers show is sent at the camera's own pace, apart
 # from the analysis: a slow GPU makes the commentary later, not the
 # picture choppy. The boxes drawn on it are those of the newest analysed
@@ -755,9 +761,15 @@ DEFAULTS = {
 
 
 class LiveMatch:
-    def __init__(self, spec, settings, publish_json, publish_bytes, second=None):
+    def __init__(self, spec, settings, publish_json, publish_bytes, second=None, others=None):
         self.spec = spec
-        self.second_spec = second     # camera 2: shown, not analysed
+        # Cameras 2 and 3: shown and can go on air, not analysed.
+        others = list(others or ([] if second is None else [second]))
+        if len(others) > MAX_CAMERAS - 1:
+            raise ValueError(f"At most {MAX_CAMERAS} cameras.")
+        self.other_specs = others
+        self.second_spec = others[0] if others else None   # (older callers)
+        self.on_air = 1               # the camera viewers and the stream see
         self.settings = {**DEFAULTS, **{k: v for k, v in (settings or {}).items()
                                         if k in DEFAULTS and v is not None}}
         self.publish_json, self.publish_bytes = publish_json, publish_bytes
@@ -777,8 +789,8 @@ class LiveMatch:
                                   spec["kind"] in ("camera", "url", "phone"))
         self.picture = "ok"           # the watch's answer at the last look
         self.blind = []               # [start, end or None]: nothing said about these
-        self.second = None
-        self.second_error = None
+        self.others = {}              # camera number -> FrameSource
+        self.other_errors = {}        # camera number -> why it stopped
         # The picture shown (DISPLAY_FPS) apart from the one analysed.
         self.display_cond = threading.Condition()
         self.display_item = None
@@ -864,8 +876,9 @@ class LiveMatch:
             self.source.start()
             if self.display_live:
                 threading.Thread(target=self._display_loop, daemon=True).start()
-            if self.second_spec is not None:
-                threading.Thread(target=self._second_loop, daemon=True).start()
+            for number, other in enumerate(self.other_specs, start=2):
+                threading.Thread(target=self._other_loop, args=(number, other),
+                                 daemon=True).start()
             self._start_sound()
             if not models_ready():
                 self._status(f"{name} is on. Loading the models: commentary starts in a moment "
@@ -925,8 +938,8 @@ class LiveMatch:
             self.stopping.set()
             if self.source is not None:
                 self.source.stopping.set()
-            if self.second is not None:
-                self.second.stopping.set()
+            for other in list(self.others.values()):
+                other.stopping.set()
             if self.sound is not None:
                 self.sound.close()
             if self.speaker is not None:
@@ -1141,33 +1154,54 @@ class LiveMatch:
             except Exception as error:     # one bad picture must not stop the rest
                 print("[live] a picture could not be sent:", error)
 
-    # -- camera 2 ------------------------------------------------------
+    # -- cameras 2 and 3 -----------------------------------------------
 
-    def _second_loop(self):
-        """Camera 2 is passed on to the browsers beside camera 1. It is not
-        analysed: the lines come from camera 1."""
-        self.second = FrameSource(self.second_spec, SECOND_FPS, True)
-        name = self.second.describe()
-        self.second.start()
+    def _other_loop(self, number, spec):
+        """Cameras 2 and 3 are passed on to the browsers beside camera 1,
+        and one of them may be on air. They are not analysed: the lines
+        come from camera 1."""
+        source = FrameSource(spec, OTHER_FPS, True)
+        self.others[number] = source
+        name = source.describe()
+        source.start()
+        kind = bytes([PICTURE_KIND[number]])
         while not self.stopping.is_set():
-            item = self.second.get()
+            item = source.get()
             if item is None:
-                if self.second.ended:
+                if source.ended:
                     break
                 continue
             frame = item[1]
-            scale = min(1.0, SECOND_WIDTH / frame.shape[1])
+            scale = min(1.0, OTHER_WIDTH / frame.shape[1])
             if scale < 1.0:
                 frame = cv2.resize(frame, None, fx=scale, fy=scale, interpolation=cv2.INTER_AREA)
             ok, jpeg = cv2.imencode(".jpg", frame, [cv2.IMWRITE_JPEG_QUALITY, STREAM_QUALITY])
             if ok:
-                # On camera 1's clock, so the browsers show both equally late.
+                # On camera 1's clock, so the browsers show all of them equally late.
                 now = self.shown_at if self.display_live else self.clock
-                self.publish_bytes(b"\x03" + struct.pack("<d", now) + jpeg.tobytes())
+                self.publish_bytes(kind + struct.pack("<d", now) + jpeg.tobytes())
         if not self.stopping.is_set():
-            self.second_error = self.second.error or "it stopped sending pictures"
-            self.note(f"Camera 2 ({name}) stopped: {self.second_error} "
-                      "The match goes on with camera 1.")
+            self.other_errors[number] = source.error or "it stopped sending pictures"
+            back = ""
+            if self.on_air == number:
+                self.on_air = 1
+                back = " Camera 1 is on air now."
+            self.note(f"Camera {number} ({name}) stopped: {self.other_errors[number]}"
+                      f"{back} The match goes on with camera 1.")
+            self.publish_json(self.stats())
+
+    def put_on_air(self, number):
+        """The operator's choice of what viewers and the stream see."""
+        try:
+            number = int(number)
+        except (TypeError, ValueError):
+            raise ValueError("Which camera?")
+        if not 1 <= number <= 1 + len(self.other_specs):
+            raise ValueError(f"There is no camera {number} in this match.")
+        if number in self.other_errors:
+            raise ValueError(f"Camera {number} has stopped: {self.other_errors[number]}")
+        self.on_air = number
+        self.publish_json(self.stats())
 
     # -- is there a match to talk about? ---------------------------------
 
@@ -1725,9 +1759,14 @@ class LiveMatch:
             "models_ready": models_ready(),
             # Stopped by hand or broken: the browsers drop what they still held back.
             "cut": self.cut or self.state == "failed",
-            "second": None if self.second_spec is None else {
-                "name": self.second.describe() if self.second else "",
-                "error": self.second_error},
+            "cameras": [{"number": 1, "name": self.source.describe() if self.source else "",
+                         "error": None}] + [
+                {"number": number,
+                 "name": (self.others[number].describe() if number in self.others
+                          else spec.get("label", "")),
+                 "error": self.other_errors.get(number)}
+                for number, spec in enumerate(self.other_specs, start=2)],
+            "on_air": self.on_air,
         }
 
     def hello(self):

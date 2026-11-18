@@ -400,11 +400,11 @@ def test_two_cameras_are_chosen_by_hand_and_a_phone_can_be_one(tmp_path, monkeyp
     started = []
 
     class FakeMatch:
-        state, id, spec, second_spec = "running", "x", None, None
+        state, id, spec, other_specs = "running", "x", None, []
 
-        def __init__(self, spec, settings, publish_json, publish_bytes, second=None):
-            self.spec, self.second_spec = spec, second
-            started.append((spec, second))
+        def __init__(self, spec, settings, publish_json, publish_bytes, second=None, others=None):
+            self.spec, self.other_specs = spec, list(others or [])
+            started.append((spec, (self.other_specs or [None])[0]))
 
         def start(self):
             pass
@@ -474,6 +474,116 @@ def test_two_cameras_are_chosen_by_hand_and_a_phone_can_be_one(tmp_path, monkeyp
         assert "access-control-allow-origin" not in client.get(
             "/api/state", headers={"Origin": "https://example.com"}).headers
         assert client.get("/camera.html").status_code == 200
+
+
+def test_three_cameras_side_by_side_and_viewers_see_the_one_on_air(tmp_path, monkeypatch):
+    import asyncio
+    import struct
+
+    from fastapi.testclient import TestClient
+
+    import server
+
+    monkeypatch.setattr(server, "VIDEO_DIR", tmp_path)
+    monkeypatch.setattr(server, "camera_names", lambda: {})
+    made = []
+
+    class FakeMatch:
+        state, id, on_air = "running", "x", 1
+
+        def __init__(self, spec, settings, publish_json, publish_bytes, second=None, others=None):
+            self.spec, self.other_specs = spec, list(others or [])
+            made.append(self)
+
+        def start(self):
+            pass
+
+        def stop(self):
+            self.state = "ended"
+
+        def hello(self):
+            return {"type": "hello", "stats": {}, "lines": [], "notes": []}
+
+        def put_on_air(self, number):
+            if not 1 <= int(number) <= 1 + len(self.other_specs):
+                raise ValueError(f"There is no camera {number} in this match.")
+            self.on_air = int(number)
+
+    monkeypatch.setattr(live_engine, "LiveMatch", FakeMatch)
+    with TestClient(server.app) as client:
+        monkeypatch.setattr(server.hub, "match", None)
+        cameras = [{"kind": "camera", "index": i} for i in range(4)]
+        # At most 3 cameras, and no device twice.
+        assert client.post("/api/start", json={"source": cameras[0], "others": cameras[1:]}
+                           ).status_code == 400
+        twice = client.post("/api/start", json={"source": cameras[0],
+                                                "others": [cameras[1], cameras[0]]})
+        assert twice.status_code == 400 and "camera 1 and camera 3" in twice.json()["detail"].lower()
+        assert client.post("/api/start", json={"source": cameras[0], "others": cameras[1:3]}
+                           ).status_code == 200
+        match = made[-1]
+        assert [spec["index"] for spec in match.other_specs] == [1, 2]
+        assert client.post("/api/camera/preview", json=cameras[2]).status_code == 409
+
+        # The operator chooses the camera on air.
+        assert client.post("/api/operator", json={"action": "on_air", "camera": 4}).status_code == 400
+        assert client.post("/api/operator", json={"action": "on_air", "camera": 3}).json()["on_air"] == 3
+        assert match.on_air == 3
+
+    # The operator gets all cameras; a viewer and the broadcast page only
+    # the one on air, as the main picture (kind 1).
+    hub = server.Hub()
+    hub.match = match
+    hub.key = "secret"
+    operator, viewer = asyncio.Queue(), asyncio.Queue()
+    hub.clients = {operator: False, viewer: True}
+    pictures = {number: bytes([live_engine.PICTURE_KIND[number]]) + struct.pack("<d", 1.0) + b"jpg"
+                for number in (1, 2, 3)}
+    for number in (1, 2, 3):
+        hub._deliver(pictures[number])
+    hub._deliver(b"\x02" + struct.pack("<d", 1.0) + b"sound")
+    sent_to = lambda queue: [queue.get_nowait() for _ in range(queue.qsize())]
+    assert sent_to(operator) == [pictures[1], pictures[2], pictures[3],
+                                 b"\x02" + struct.pack("<d", 1.0) + b"sound"]
+    assert sent_to(viewer) == [b"\x01" + pictures[3][1:], b"\x02" + struct.pack("<d", 1.0) + b"sound"]
+
+
+def test_a_camera_that_stops_goes_off_air(tmp_path, monkeypatch):
+    match = live_engine.LiveMatch({"kind": "camera", "index": 0}, {}, lambda item: None,
+                                  lambda item: None,
+                                  others=[{"kind": "camera", "index": 1, "label": "camera 1"},
+                                          {"kind": "camera", "index": 2, "label": "camera 2"}])
+    assert [c["number"] for c in match.stats()["cameras"]] == [1, 2, 3]
+    match.put_on_air(2)
+    assert match.stats()["on_air"] == 2
+    with pytest.raises(ValueError):
+        match.put_on_air(4)
+    with pytest.raises(ValueError):
+        live_engine.LiveMatch({"kind": "camera", "index": 0}, {}, print, print,
+                              others=[{"kind": "camera", "index": i} for i in (1, 2, 3)])
+
+    class DeadCamera:
+        error, ended, stopping = "unplugged", True, None
+
+        def __init__(self, *args, **kwargs):
+            import threading
+            self.stopping = threading.Event()
+
+        def describe(self):
+            return "camera 1"
+
+        def start(self):
+            pass
+
+        def get(self):
+            return None
+
+    monkeypatch.setattr(live_engine, "FrameSource", DeadCamera)
+    match._other_loop(2, match.other_specs[0])
+    stats = match.stats()
+    assert stats["on_air"] == 1 and stats["cameras"][1]["error"] == "unplugged"
+    with pytest.raises(ValueError):
+        match.put_on_air(2)
 
 
 def test_https_certificate_is_made_once_for_this_pc(tmp_path):

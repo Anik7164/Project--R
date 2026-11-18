@@ -61,7 +61,11 @@ On the page choose the match feed and press **Start**:
 | Stream | an address such as `rtsp://192.168.0.10:8554/match` (a phone with an RTSP camera app works) |
 | Video | a file from `data/videos/` (or add one on the page); it is played as if it were live |
 
-**Camera 1 and camera 2.** With "2 cameras" each camera gets its own list of devices: the cameras plugged into the PC (with their names on Windows), a network camera by its address, and every phone that is sending its camera. You decide which device is camera 1 and which is camera 2; **Show its picture** takes one picture from a device so you can see which is which, and **Swap** exchanges them. The commentary comes from camera 1. Camera 2 is shown as the small picture in the corner (click it to make it the big one); it is not analysed yet.
+**Up to 3 cameras, and which one is on air.** With "2 cameras" or "3 cameras" each camera gets its own list of devices: the cameras plugged into the PC (with their names on Windows), a network camera by its address, and every phone that is sending its camera. You decide which device is camera 1, 2 and 3; **Show** takes one picture from a device so you can see which is which, **Swap** exchanges cameras 1 and 2, and choosing a device another camera has swaps those two. The commentary comes from camera 1 (the others are not analysed yet).
+
+While the match runs, the operator sees all cameras side by side. **Put on air** under a camera (or the keys 1, 2, 3) chooses what viewers and the stream see; the camera on air has a red frame. A double-click on a camera fills the picture with it, and another double-click (or Esc) brings all of them back. If the camera on air stops, camera 1 goes on air by itself.
+
+**Broadcast (streaming).** `http://127.0.0.1:8000/?view=air` shows only the camera on air, the score and the commentary lines, with nothing else on the page: add it in OBS as a *Browser source* (1920x1080) and stream to YouTube or Facebook from OBS, or open it on a big screen. The address is under *Picture and sound* on the operator's page (**Copy**). It is 10 s behind like the viewers' page, so each line lands on its moment; a camera put on air shows there 10 s later too.
 
 **One screen.** The picture takes the left of the page and the commentary and set-up (Match feed, Settings, Picture and sound) sit on the right, so nothing needs scrolling on a laptop. The operator's buttons are over the picture: Team A down the left edge, Team B down the right, the match clock along the bottom. Each folds into a small tab and opens again with a tap, and the full-screen button keeps them. On a phone the page scrolls but the picture stays at the top.
 
@@ -97,7 +101,7 @@ Without pywebview it opens an Edge or Chrome app window instead. Its settings an
 
 ### iPhone app
 
-`mobile/` wraps the same pages as an iPhone app that connects to the PC over Wi-Fi: watch, operate, or use the phone as camera 1 or camera 2. See [mobile/README.md](mobile/README.md) for the no-install way (Safari → Add to Home Screen), the cloud build of the .ipa and how to put it on a phone from Windows.
+`mobile/` wraps the same pages as an iPhone app that connects to the PC over Wi-Fi: watch, operate, or use the phone as camera 1, 2 or 3. See [mobile/README.md](mobile/README.md) for the no-install way (Safari → Add to Home Screen), the cloud build of the .ipa and how to put it on a phone from Windows.
 
 A phone's browser can also be a camera without the app: start the server with `--https` and open `camera.html` on the https address.
 

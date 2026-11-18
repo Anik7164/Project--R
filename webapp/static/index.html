@@ -39,17 +39,32 @@
     </div>
 
     <div class="stage" id="stage">
-      <canvas id="picture" class="main" width="960" height="540"></canvas>
-      <canvas id="picture2" class="inset" width="640" height="360" hidden
-        title="Camera 2: click to make it the big picture" tabindex="0" role="button"
-        aria-label="Camera 2: make it the big picture"></canvas>
+      <!-- Up to 3 cameras side by side (the operator); a double-click fills
+           the picture with one. Viewers and the broadcast see the one on air. -->
+      <div class="views" id="views" data-count="1">
+        <div class="view" data-camera="1">
+          <canvas id="picture" width="960" height="540"></canvas>
+          <div class="view-bar op-only"><span class="view-name">Camera 1</span>
+            <button type="button" class="view-air">Put on air</button></div>
+        </div>
+        <div class="view" data-camera="2" hidden>
+          <canvas width="960" height="540"></canvas>
+          <div class="view-bar op-only"><span class="view-name">Camera 2</span>
+            <button type="button" class="view-air">Put on air</button></div>
+        </div>
+        <div class="view" data-camera="3" hidden>
+          <canvas width="960" height="540"></canvas>
+          <div class="view-bar op-only"><span class="view-name">Camera 3</span>
+            <button type="button" class="view-air">Put on air</button></div>
+        </div>
+      </div>
       <video id="finishedVideo" controls playsinline hidden></video>
       <div class="idle" id="idle">
         <p class="bn">ম্যাচ শুরুর অপেক্ষায়</p>
         <p id="idleText">Choose a camera, a stream or a video on the right and press Start.</p>
       </div>
       <button class="sound-on" id="soundOn" hidden>Turn sound on</button>
-      <div class="badge" id="liveBadge" hidden><span></span><b id="liveText">LIVE</b><small id="lagText"></small></div>
+      <div class="badge" id="liveBadge" hidden><span></span><b id="liveText">LIVE</b><small id="lagText"></small><small id="onAirText"></small></div>
       <div class="hold" id="hold" role="status" hidden></div>
       <div class="caption" id="caption" hidden><p class="bn" id="captionText"></p></div>
       <div class="toast" id="toast" role="status" hidden></div>
@@ -154,6 +169,7 @@
             <select id="cameraCount">
               <option value="1">1 camera</option>
               <option value="2">2 cameras</option>
+              <option value="3">3 cameras</option>
             </select>
           </label>
           <div class="cameras" id="cameras">
@@ -169,7 +185,7 @@
             </div>
             <button type="button" id="swapCameras" hidden>⇄ Swap camera 1 and camera 2</button>
             <div class="camera-slot" data-slot="2" hidden>
-              <h3>Camera 2 <small>shown beside camera 1</small></h3>
+              <h3>Camera 2 <small>shown beside camera 1, can go on air</small></h3>
               <div class="slot-row">
                 <select class="device" aria-label="Device for camera 2"></select>
                 <button type="button" class="ghost look">Show</button>
@@ -177,6 +193,16 @@
               <input type="text" class="address" placeholder="rtsp://192.168.0.11:8554/match"
                 aria-label="Address of camera 2" hidden>
               <img alt="Picture from camera 2" hidden>
+            </div>
+            <div class="camera-slot" data-slot="3" hidden>
+              <h3>Camera 3 <small>shown beside camera 1, can go on air</small></h3>
+              <div class="slot-row">
+                <select class="device" aria-label="Device for camera 3"></select>
+                <button type="button" class="ghost look">Show</button>
+              </div>
+              <input type="text" class="address" placeholder="rtsp://192.168.0.12:8554/match"
+                aria-label="Address of camera 3" hidden>
+              <img alt="Picture from camera 3" hidden>
             </div>
           </div>
           <div class="buttons">
@@ -248,6 +274,12 @@
           <input type="range" id="delay" min="0" max="40" step="1" value="10">
         </label>
         <p class="hint" id="delayHint">The picture is shown a few seconds late so each line lands on the moment it describes. A goal is only known after the celebration (about 25 s): set 30 s if goals should be called on time.</p>
+        <div class="op-only broadcast-box">
+          <label>Broadcast address <small>(OBS browser source or a big screen: only the camera on air, the score and the lines)</small>
+            <span class="slot-row"><input type="text" id="broadcastUrl" readonly>
+              <button type="button" class="ghost" id="copyBroadcast">Copy</button></span>
+          </label>
+        </div>
         <label>Match sound
           <input type="range" id="matchVolume" min="0" max="100" value="35">
         </label>

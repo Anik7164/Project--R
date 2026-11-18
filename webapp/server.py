@@ -79,7 +79,7 @@ class Hub:
     SOUND_LIMIT = 200
 
     def __init__(self):
-        self.clients = set()
+        self.clients = {}  # queue -> True: this browser only gets the camera on air
         self.loop = None
         self.match = None
         self.key = None    # operator key; None: anyone who can open the page
@@ -88,8 +88,21 @@ class Hub:
         self.warm = False  # load the models when the server starts (main() sets it)
 
     def _deliver(self, item):
-        for client in list(self.clients):
+        from live_engine import CAMERA_OF_KIND
+
+        camera = CAMERA_OF_KIND.get(item[0]) if isinstance(item, bytes) else None
+        on_air = getattr(self.match, "on_air", 1)
+        for client, air_only in list(self.clients.items()):
             if isinstance(item, bytes):
+                if camera is not None and air_only:
+                    # Viewers and the broadcast see one picture: the camera on air.
+                    if camera != on_air:
+                        continue
+                    if camera != 1:
+                        item_sent = b"\x01" + item[1:]
+                        if client.qsize() < self.FRAME_LIMIT:
+                            client.put_nowait(item_sent)
+                        continue
                 limit = self.SOUND_LIMIT if item[:1] == b"\x02" else self.FRAME_LIMIT
                 if client.qsize() >= limit:
                     continue
@@ -244,8 +257,8 @@ def in_use(spec):
     match = hub.match
     if match is None or match.state not in ("starting", "running"):
         return False
-    return any(used is not None and same_device(spec, used)
-               for used in (match.spec, match.second_spec))
+    used = [match.spec, *getattr(match, "other_specs", [])]
+    return any(one is not None and same_device(spec, one) for one in used)
 
 
 
@@ -292,21 +305,28 @@ async def upload(request: Request, file: UploadFile):
 @app.post("/api/start")
 async def start(request: Request):
     need_operator(request)
-    from live_engine import LiveMatch
+    from live_engine import MAX_CAMERAS, LiveMatch
 
     body = await request.json()
     spec = source_spec(body.get("source"))
-    second = None
-    if body.get("second"):
-        # Camera 2 is shown beside camera 1; which device is which is the
-        # operator's choice on the page.
-        second = source_spec(body["second"], live_only=True)
-        if same_device(spec, second):
-            raise HTTPException(400, "Camera 1 and camera 2 are the same device. "
-                                     "Choose two different ones.")
+    # Cameras 2 and 3 are shown beside camera 1 and can be put on air; which
+    # device is which is the operator's choice on the page.
+    wanted = list(body.get("others") or [])
+    if body.get("second") and not wanted:
+        wanted = [body["second"]]
+    if len(wanted) > MAX_CAMERAS - 1:
+        raise HTTPException(400, f"At most {MAX_CAMERAS} cameras.")
+    others = []
+    for number, source in enumerate(wanted, start=2):
+        other = source_spec(source, live_only=True)
+        for earlier, used in enumerate([spec, *others], start=1):
+            if same_device(used, other):
+                raise HTTPException(400, f"Camera {earlier} and camera {number} are the same "
+                                         "device. Choose different ones.")
+        others.append(other)
     if hub.match is not None and hub.match.state in ("starting", "running"):
         raise HTTPException(409, "A match is already running. Stop it first.")
-    hub.match = LiveMatch(spec, body.get("settings"), hub.publish, hub.publish, second=second)
+    hub.match = LiveMatch(spec, body.get("settings"), hub.publish, hub.publish, others=others)
     hub.match.start()
     hub.publish(hub.match.hello())
     return {"session": hub.match.id}
@@ -367,6 +387,15 @@ def stop(request: Request):
 async def operator(request: Request):
     need_operator(request)
     body = await request.json()
+    if body.get("action") == "on_air":
+        # Which camera viewers and the stream see: also while the models load.
+        if hub.match is None or hub.match.state not in ("starting", "running"):
+            raise HTTPException(409, "No match is running.")
+        try:
+            hub.match.put_on_air(body.get("camera"))
+        except ValueError as error:
+            raise HTTPException(400, str(error))
+        return {"ok": True, "on_air": hub.match.on_air}
     if hub.match is None or hub.match.state != "running":
         raise HTTPException(409, "No match is running.")
     try:
@@ -417,7 +446,11 @@ def media_spoken(name: str):
 async def feed(socket_: WebSocket):
     await socket_.accept()
     client = asyncio.Queue()
-    hub.clients.add(client)
+    # A viewer (no operator key) or the broadcast page (?view=air) only gets
+    # the camera on air; the operator gets all of them, side by side.
+    viewer = bool(hub.key) and not secrets.compare_digest(
+        socket_.query_params.get("key", ""), hub.key)
+    hub.clients[client] = viewer or socket_.query_params.get("view") == "air"
     try:
         if hub.match is not None:
             await socket_.send_text(json.dumps(hub.match.hello(), ensure_ascii=False))
@@ -430,7 +463,7 @@ async def feed(socket_: WebSocket):
     except (WebSocketDisconnect, RuntimeError):
         pass
     finally:
-        hub.clients.discard(client)
+        hub.clients.pop(client, None)
 
 
 @app.websocket("/ws/camera")
@@ -593,7 +626,9 @@ def main():
             sys.exit("--https needs:  pip install cryptography")
         secure = {"ssl_certfile": str(cert_file), "ssl_keyfile": str(key_file)}
     if local:
-        print(f"\nOpen  {scheme}://127.0.0.1:{args.port}\n")
+        print(f"\nOpen  {scheme}://127.0.0.1:{args.port}")
+        print(f"Broadcast (OBS browser source, the camera on air only): "
+              f"{scheme}://127.0.0.1:{args.port}/?view=air\n")
     else:
         hub.key = operator_key()
         hub.share = {"address": f"{address}:{args.port}", "key": hub.key,
@@ -601,6 +636,7 @@ def main():
         print(f"\nOperator (you):      {scheme}://127.0.0.1:{args.port}/?key={hub.key}")
         print(f"Operator on a phone: {scheme}://{address}:{args.port}/?key={hub.key}")
         print(f"Viewers:             {scheme}://{address}:{args.port}")
+        print(f"Broadcast (OBS):     {scheme}://127.0.0.1:{args.port}/?view=air")
         if args.https:
             print("The iPhone app cannot use this https server (its certificate is home-made): "
                   "for the app, start without --https.\n")

@@ -2,9 +2,11 @@
 //
 // The server sends, over one WebSocket:
 //   text   {type: hello|status|stats|line|audio|note}
-//   bytes  1 byte kind (1 picture JPEG, 2 match sound s16le 16 kHz mono,
-//          3 picture of camera 2), 8 bytes little-endian seconds into the
-//          match feed, then the data
+//   bytes  1 byte kind (1 picture JPEG of camera 1, 2 match sound s16le
+//          16 kHz mono, 3 picture of camera 2, 4 picture of camera 3),
+//          8 bytes little-endian seconds into the match feed, then the data
+// The operator gets every camera and sees them side by side; viewers and
+// the broadcast page (?view=air) get only the camera on air, as kind 1.
 // The picture is shown `delay` seconds late; a line is shown and spoken
 // when the delayed picture reaches the moment the line is about.
 // (SERVER, key, api() and friends: common.js.)
@@ -54,13 +56,10 @@ function showError(error) {
 // time); viewers see it late, with each line on its moment. Each keeps
 // their own setting.
 const JITTER = 0.4;         // seconds always held back: smooth pictures over Wi-Fi
-const delayKey = () => (operator ? "delay operator" : "delay");
+const delayKey = () => (BROADCAST ? "delay broadcast" : operator ? "delay operator" : "delay");
 let delay = 10;
 let base = null;            // performance seconds at match second 0, delay included
-let frames = [];            // {t, blob}, oldest first
-let frames2 = [];           // camera 2, the same
 let newest = 0;
-let drawn = -1;
 const nowSeconds = () => performance.now() / 1000;
 const playhead = () => (base === null ? -1 : nowSeconds() - base);
 
@@ -76,45 +75,78 @@ function retime(t) {
 
 // ---------------------------------------------------------------- picture
 
-const canvas = $("picture");
-const context = canvas.getContext("2d");
+// Up to 3 cameras. The operator sees them side by side and chooses which
+// one is on air; a double-click makes one fill the picture, and another
+// double-click brings them all back.
+const views = $("views");
+const viewList = [...views.querySelectorAll(".view")];
+const cams = viewList.map((view) => {
+  const target = view.querySelector("canvas");
+  return { view, canvas: target, context: target.getContext("2d"), frames: [], drawn: -1 };
+});
+const BROADCAST = new URLSearchParams(location.search).get("view") === "air";
+let cameraCount = 1;
+let onAir = 1;
 
-function onPicture(t, blob) {
-  newest = t;
-  retime(t);
-  frames.push({ t, blob });
-  if (frames.length > 1200) frames.splice(0, frames.length - 1200);
-  $("idle").hidden = true;
+function onPicture(t, blob, camera = 1) {
+  if (camera === 1) {
+    newest = t;
+    retime(t);
+    $("idle").hidden = true;
+  } else if (base === null) {
+    return;                           // camera 1 sets the clock
+  }
+  const list = cams[camera - 1].frames;
+  list.push({ t, blob });
+  if (list.length > 1200) list.splice(0, list.length - 1200);
 }
 
-// Camera 2 is the small picture in the corner; a click makes it the big one.
-const canvas2 = $("picture2");
-const context2 = canvas2.getContext("2d");
-
-function onPicture2(t, blob) {
-  if (base === null) return;          // camera 1 sets the clock
-  frames2.push({ t, blob });
-  if (frames2.length > 600) frames2.splice(0, frames2.length - 600);
+function setFullView(camera) {
+  if (camera && cameraCount > 1) views.dataset.full = String(camera);
+  else delete views.dataset.full;
+  viewList.forEach((view, index) => {
+    view.title = cameraCount < 2 ? "" : views.dataset.full
+      ? "Double-click: all cameras side by side"
+      : `Camera ${index + 1}. Double-click: full view`;
+  });
 }
 
-function swapPictures() {
-  const second = canvas2.classList.contains("main");
-  canvas2.className = second ? "inset" : "main";
-  canvas.className = second ? "main" : "inset";
-  const small = second ? canvas2 : canvas;
-  const large = second ? canvas : canvas2;
-  small.title = `Camera ${second ? 2 : 1}: click to make it the big picture`;
-  small.setAttribute("role", "button");
-  small.tabIndex = 0;
-  large.removeAttribute("title");
-  large.removeAttribute("role");
-  large.removeAttribute("tabindex");
+function setCameras(cameras, air) {
+  const count = Math.max(1, Math.min(3, (cameras && cameras.length) || 1));
+  if (count !== cameraCount) {
+    cameraCount = count;
+    views.dataset.count = String(count);
+    cams.forEach((cam, index) => {
+      if (index >= count) {
+        cam.frames = [];
+        cam.context.clearRect(0, 0, cam.canvas.width, cam.canvas.height);
+      }
+    });
+    if (count < 2 || Number(views.dataset.full) > count) setFullView(null);
+    else setFullView(Number(views.dataset.full) || null);
+  }
+  onAir = air || 1;
+  viewList.forEach((view, index) => {
+    const number = index + 1;
+    const camera = (cameras || [])[index];
+    view.hidden = number > count;
+    view.classList.toggle("on-air", count > 1 && number === onAir);
+    view.querySelector(".view-name").textContent = camera
+      ? `Camera ${number}${camera.name ? ` · ${camera.name}` : ""}` : `Camera ${number}`;
+    view.querySelector(".view-air").textContent = camera && camera.error
+      ? "Stopped" : number === onAir ? "On air" : "Put on air";
+    view.querySelector(".view-air").disabled = Boolean(camera && camera.error) || number === onAir;
+  });
 }
 
-function showSecond(show) {
-  if (!show && canvas2.classList.contains("main")) swapPictures();
-  canvas2.hidden = !show;
-  if (!show) frames2 = [];
+async function putOnAir(number) {
+  if (!operator || number > cameraCount || number === onAir) return;
+  try {
+    await api("/api/operator", { action: "on_air", camera: number });
+    toast(`Camera ${bn(number)} on air`);
+  } catch (error) {
+    toast(error.message || String(error));
+  }
 }
 
 function draw(target, targetContext, blob) {
@@ -132,18 +164,14 @@ function render() {
   requestAnimationFrame(render);
   const at = playhead();
   if (base === null) return;
-  let pick = null;
-  while (frames.length && frames[0].t <= at) pick = frames.shift();
-  if (pick && pick.t !== drawn) {
-    drawn = pick.t;
-    draw(canvas, context, pick.blob);
-  }
-  let pick2 = null;
-  while (frames2.length && frames2[0].t <= at) pick2 = frames2.shift();
-  if (pick2) {
-    draw(canvas2, context2, pick2.blob);
-    if (canvas2.hidden) showSecond(true);
-  }
+  cams.forEach((cam) => {
+    let pick = null;
+    while (cam.frames.length && cam.frames[0].t <= at) pick = cam.frames.shift();
+    if (pick && pick.t !== cam.drawn) {
+      cam.drawn = pick.t;
+      draw(cam.canvas, cam.context, pick.blob);
+    }
+  });
   releaseLines(at);
 }
 requestAnimationFrame(render);
@@ -297,8 +325,7 @@ function kit(element, colour) {
 // holding back (the picture runs `delay` seconds late) is dropped, so
 // nothing more is shown or said once there is no match feed.
 function cutNow() {
-  frames = [];
-  frames2 = [];
+  cams.forEach((cam) => { cam.frames = []; });
   base = null;
   audioBase = null;
   waiting.length = 0;
@@ -311,8 +338,8 @@ function cutNow() {
   document.querySelectorAll("#feed .speaking").forEach((item) => item.classList.remove("speaking"));
   clearTimeout(captionTimer);
   $("caption").hidden = true;
-  context.clearRect(0, 0, canvas.width, canvas.height);
-  showSecond(false);
+  cams.forEach((cam) => cam.context.clearRect(0, 0, cam.canvas.width, cam.canvas.height));
+  setCameras(null, 1);
   $("idle").hidden = false;
 }
 
@@ -332,11 +359,14 @@ function onStats(next) {
   // Why nothing is said just now: no picture, a black one, nobody in view.
   $("hold").hidden = !next.hold;
   $("hold").textContent = next.hold || "";
-  if (!next.second) showSecond(false);
+  // Viewers and the broadcast get one picture: the camera on air.
+  setCameras(operator && !BROADCAST && running ? next.cameras : null, next.on_air);
+  $("onAirText").textContent = next.cameras && next.cameras.length > 1
+    ? `camera ${bn(next.on_air || 1)} on air` : "";
   $("liveBadge").hidden = state !== "running";
   $("liveText").textContent = next.live_source ? "LIVE" : "PLAYING AS LIVE";
   $("lagText").textContent = delay ? `${delay} s behind` : "";
-  if (!running && !frames.length && state !== "ended") $("idle").hidden = false;
+  if (!running && !cams[0].frames.length && state !== "ended") $("idle").hidden = false;
   $("start").disabled = running;
   $("stop").disabled = !running;
 
@@ -372,8 +402,8 @@ function onStats(next) {
 
 function newSession(id) {
   sessionId = id;
-  frames = [];
-  showSecond(false);
+  cams.forEach((cam) => { cam.frames = []; });
+  setCameras(null, 1);
   $("feedNote").hidden = true;
   base = null;
   audioBase = null;
@@ -461,16 +491,21 @@ function choosePanel(name) {
 // ---------------------------------------------------------------- socket
 
 function connect() {
-  const socket = new WebSocket(socketUrl("/ws"));
+  // The key tells the server this is the operator (all cameras); the
+  // broadcast page asks for the camera on air only.
+  const query = new URLSearchParams();
+  if (key) query.set("key", key);
+  if (BROADCAST) query.set("view", "air");
+  const socket = new WebSocket(socketUrl(`/ws${query.toString() ? `?${query}` : ""}`));
   socket.binaryType = "arraybuffer";
   socket.onmessage = (event) => {
     if (typeof event.data !== "string") {
       const view = new DataView(event.data);
       const kind = view.getUint8(0);
       const t = view.getFloat64(1, true);
-      if (kind === 1) onPicture(t, new Blob([new Uint8Array(event.data, 9)], { type: "image/jpeg" }));
+      const camera = { 1: 1, 3: 2, 4: 3 }[kind];
+      if (camera) onPicture(t, new Blob([new Uint8Array(event.data, 9)], { type: "image/jpeg" }), camera);
       else if (kind === 2) onMatchSound(t, event.data.slice(9));
-      else if (kind === 3) onPicture2(t, new Blob([new Uint8Array(event.data, 9)], { type: "image/jpeg" }));
       return;
     }
     const message = JSON.parse(event.data);
@@ -511,7 +546,7 @@ async function playFinished() {
     const video = $("finishedVideo");
     video.src = serverUrl(data.video);
     video.hidden = false;
-    canvas.hidden = true;
+    views.hidden = true;
     $("idle").hidden = true;
     $("statusText").textContent = `Finished commentary: ${name}` + (data.spoken ? "" : " (text only)");
     video.play().catch(() => {});
@@ -524,7 +559,7 @@ function stopFinished() {
   video.pause();
   video.removeAttribute("src");
   video.hidden = true;
-  canvas.hidden = false;
+  views.hidden = false;
   finishedLines = [];
 }
 
@@ -591,9 +626,9 @@ function seconds(text) {
   return parts.length === 2 ? parts[0] * 60 + parts[1] : parts[0] || 0;
 }
 
-// ---- cameras: which device is camera 1, which is camera 2
+// ---- cameras: which device is camera 1, 2 and 3
 
-const slots = [...document.querySelectorAll(".camera-slot")];   // camera 1, camera 2
+const slots = [...document.querySelectorAll(".camera-slot")];   // camera 1, 2, 3
 const ADDRESS = "address";            // "a network camera: type its address"
 let cameraList = [];
 const chosen = (() => {
@@ -653,12 +688,15 @@ function clearPreview(slot) {
   image.hidden = true;
 }
 
+const usedSlots = () => slots.slice(0, Number($("cameraCount").value) || 1);
+
 function onDeviceChosen(slot) {
   const mine = slotParts(slot);
-  const otherSlot = slots.find((candidate) => candidate !== slot);
-  const theirs = slotParts(otherSlot);
-  // Choosing the other camera's device hands that camera this one's: a swap.
-  if (mine.device.value !== ADDRESS && mine.device.value === theirs.device.value) {
+  // Choosing another camera's device hands that camera this one's: a swap.
+  const otherSlot = usedSlots().find((candidate) => candidate !== slot &&
+    mine.device.value !== ADDRESS && slotParts(candidate).device.value === mine.device.value);
+  if (otherSlot) {
+    const theirs = slotParts(otherSlot);
     theirs.device.value = mine.device.dataset.was;
     theirs.device.dataset.was = theirs.device.value;
     theirs.address.hidden = theirs.device.value !== ADDRESS;
@@ -685,19 +723,21 @@ function swapCameras() {
 
 function setCameraCount(count) {
   $("cameraCount").value = String(count);
-  slots[1].hidden = count < 2;
+  slots.forEach((slot, index) => { slot.hidden = index >= count; });
   $("swapCameras").hidden = count < 2;
-  if (count >= 2) {
-    // Two cameras cannot be the same device.
-    const [one, two] = slots.map(slotParts);
-    if (two.device.value !== ADDRESS && two.device.value === one.device.value) {
-      const free = [...two.device.options].map((option) => option.value)
-        .find((value) => value !== ADDRESS && value !== one.device.value);
-      two.device.value = free || ADDRESS;
-      two.device.dataset.was = two.device.value;
-      two.address.hidden = two.device.value !== ADDRESS;
+  // Two cameras cannot be the same device.
+  const taken = new Set();
+  slots.slice(0, count).forEach((slot) => {
+    const parts = slotParts(slot);
+    if (parts.device.value !== ADDRESS && taken.has(parts.device.value)) {
+      const free = [...parts.device.options].map((option) => option.value)
+        .find((value) => value !== ADDRESS && !taken.has(value));
+      parts.device.value = free || ADDRESS;
+      parts.device.dataset.was = parts.device.value;
+      parts.address.hidden = parts.device.value !== ADDRESS;
     }
-  }
+    taken.add(parts.device.value);
+  });
 }
 
 function cameraSource(slot) {
@@ -731,10 +771,10 @@ async function lookAtCamera(slot) {
 async function start() {
   showError();
   const source = { kind: sourceKind };
-  let second = null;
+  let others = [];
   if (sourceKind === "camera") {
     Object.assign(source, cameraSource(slots[0]));
-    if ($("cameraCount").value === "2") second = cameraSource(slots[1]);
+    others = usedSlots().slice(1).map(cameraSource);
     saveCameras();
   }
   if (sourceKind === "url") source.url = $("streamUrl").value;
@@ -753,7 +793,7 @@ async function start() {
   soundOn();
   try {
     $("start").disabled = true;
-    await api("/api/start", { source, second, settings });
+    await api("/api/start", { source, others, settings });
   } catch (error) {
     $("start").disabled = false;
     showError(error);
@@ -801,17 +841,29 @@ function wire() {
   $("cameraCount").onchange = (event) => { setCameraCount(Number(event.target.value)); saveCameras(); };
   $("swapCameras").onclick = swapCameras;
   $("refreshCameras").onclick = loadCameras;
+  $("copyBroadcast").onclick = () => {
+    $("broadcastUrl").select();
+    navigator.clipboard?.writeText($("broadcastUrl").value)
+      .then(() => toast("Broadcast address copied"))
+      .catch(() => document.execCommand && document.execCommand("copy"));
+  };
   $("cameraPage").href = pageLink("camera.html");
-  // Camera 2 in the corner: a click (or Enter) makes it the big picture.
-  for (const picture of [canvas, canvas2]) {
-    picture.onclick = () => { if (picture.classList.contains("inset")) swapPictures(); };
-    picture.onkeydown = (event) => {
-      if ((event.key === "Enter" || event.key === " ") && picture.classList.contains("inset")) {
-        event.preventDefault();
-        swapPictures();
-      }
+  // The cameras side by side: a double-click fills the picture with one,
+  // the next double-click shows them all again. "Put on air" (or the keys
+  // 1, 2, 3) chooses what viewers and the stream see.
+  viewList.forEach((view, index) => {
+    view.ondblclick = (event) => {
+      if (event.target.closest("button")) return;
+      setFullView(views.dataset.full ? null : index + 1);
     };
-  }
+    view.querySelector(".view-air").onclick = () => putOnAir(index + 1);
+  });
+  document.addEventListener("keydown", (event) => {
+    if (!operator || BROADCAST || cameraCount < 2 || event.ctrlKey || event.metaKey || event.altKey) return;
+    if (event.target.closest && event.target.closest("input, select, textarea")) return;
+    if (["1", "2", "3"].includes(event.key)) putOnAir(Number(event.key));
+    else if (event.key === "Escape" && views.dataset.full) setFullView(null);
+  });
 
   document.querySelectorAll(".ov [data-action]").forEach((button) => {
     button.onclick = async () => {
@@ -845,7 +897,7 @@ function wire() {
     delay = Number(event.target.value);
     remember(delayKey(), String(delay));
     $("delayOut").textContent = `${delay} s`;
-    if (frames.length || newest) { base = null; retime(newest); }
+    if (newest) { base = null; retime(newest); }
     if (stats) $("lagText").textContent = delay ? `${delay} s behind` : "";
   };
   $("matchVolume").oninput = (event) => { if (matchGain) matchGain.gain.value = event.target.value / 100; };
@@ -868,9 +920,12 @@ async function boot() {
     const state = await api("/api/state");
     operator = state.operator;
     colours = state.colours;
-    document.body.classList.toggle("viewer", !operator);
-    if (!operator) choosePanel("view");
-    delay = Number(remembered(delayKey()) ?? (operator ? 0 : 10));
+    // The broadcast page (?view=air): only the camera on air, the score and
+    // the lines, for a stream (OBS "browser source") or a big screen.
+    document.body.classList.toggle("broadcast", BROADCAST);
+    document.body.classList.toggle("viewer", !operator || BROADCAST);
+    if (!operator || BROADCAST) choosePanel("view");
+    delay = Number(remembered(delayKey()) ?? (operator && !BROADCAST ? 0 : 10));
     $("delay").value = delay;
     $("delayOut").textContent = `${delay} s`;
     if (operator) {
@@ -888,7 +943,10 @@ async function boot() {
     });
     fillVideos(state.videos);
     fillCameras(state.cameras || []);
-    setCameraCount(chosen.count === 2 ? 2 : 1);
+    setCameraCount([2, 3].includes(chosen.count) ? chosen.count : 1);
+    // What to put in OBS (or open on a big screen) for the stream.
+    const air = `${state.share ? state.share.url : (SERVER || location.origin)}/?view=air`;
+    $("broadcastUrl").value = air;
     if (state.mics) {
       $("mics").replaceChildren(...state.mics.map((name) => {
         const option = document.createElement("option");
@@ -904,6 +962,12 @@ async function boot() {
     }
     if (!operator) $("idleText").textContent = "The commentary starts when the operator starts the match.";
     $("soundOn").hidden = false;
+    if (BROADCAST) {
+      $("idleText").textContent = "The stream picture: the camera on air shows here when the match starts.";
+      soundOn();                      // OBS plays sound without a click; a browser may still ask
+      if (audio && audio.state === "running") $("soundOn").hidden = true;
+      else $("soundOn").hidden = false;
+    }
   } catch (error) { showError(error); }
   connect();
 }
