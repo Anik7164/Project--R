@@ -1,0 +1,9 @@
+{
+  "appId": "com.projectr.livecommentary",
+  "appName": "Project R",
+  "webDir": "www",
+  "ios": {
+    "contentInset": "never",
+    "backgroundColor": "#0b1210"
+  }
+}

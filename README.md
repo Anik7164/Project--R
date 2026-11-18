@@ -39,8 +39,75 @@ flowchart TD
     
     G --> H["Synced Audio Broadcast"]
     F --> H
+```
 
 ---
+
+## 🔴 Live commentary web app
+
+`webapp/` runs the pipeline while the match is played and shows it in a browser: the picture, the Bengali lines, the voice, a scoreboard.
+
+```powershell
+pip install -r requirements-webapp.txt
+python webapp/server.py                  # then open http://127.0.0.1:8000
+python webapp/server.py --host 0.0.0.0   # phones and laptops on the same Wi-Fi can watch too
+```
+
+On the page choose the match feed and press **Start**:
+
+| Feed | What to give |
+|---|---|
+| Camera | one or two cameras, each chosen by hand (see below), and, for whistle and crowd, the microphone |
+| Stream | an address such as `rtsp://192.168.0.10:8554/match` (a phone with an RTSP camera app works) |
+| Video | a file from `data/videos/` (or add one on the page); it is played as if it were live |
+
+**Up to 3 cameras, and which one is on air.** With "2 cameras" or "3 cameras" each camera gets its own list of devices: the cameras plugged into the PC (with their names on Windows), a network camera by its address, and every phone that is sending its camera. You decide which device is camera 1, 2 and 3; **Show** takes one picture from a device so you can see which is which, **Swap** exchanges cameras 1 and 2, and choosing a device another camera has swaps those two. The commentary comes from camera 1 (the others are not analysed yet).
+
+While the match runs, the operator sees all cameras side by side. **Put on air** under a camera (or the keys 1, 2, 3) chooses what viewers and the stream see; the camera on air has a red frame. A double-click on a camera fills the picture with it, and another double-click (or Esc) brings all of them back. If the camera on air stops, camera 1 goes on air by itself.
+
+**Broadcast (streaming).** `http://127.0.0.1:8000/?view=air` shows only the camera on air, the score and the commentary lines, with nothing else on the page: add it in OBS as a *Browser source* (1920x1080) and stream to YouTube or Facebook from OBS, or open it on a big screen. The address is under *Picture and sound* on the operator's page (**Copy**). It is 10 s behind like the viewers' page, so each line lands on its moment; a camera put on air shows there 10 s later too.
+
+**One screen.** The picture takes the left of the page and the commentary and set-up (Match feed, Settings, Picture and sound) sit on the right, so nothing needs scrolling on a laptop. The operator's buttons are over the picture: Team A down the left edge, Team B down the right, the match clock along the bottom. Each folds into a small tab and opens again with a tap, and the full-screen button keeps them. On a phone the page scrolls but the picture stays at the top.
+
+**The camera starts at once.** The server loads the models as soon as it starts, and Start shows the camera's picture straight away while anything still loading finishes; commentary begins when the models are ready. The picture is sent at the camera's own pace (up to 20 frames a second) whatever the analysis rate, so a busy GPU makes lines later, not the picture choppy. USB webcams are opened in MJPG, which gives 30 frames a second at 1280x720 where the default often gives 5 to 10. The operator's own view has no picture delay; viewers keep 10 s.
+
+**Nothing is said without a match in the picture.** The status only turns to "Live" once the first picture has arrived and been analysed, and commentary is on hold (with the reason shown over the picture) while the camera sends no pictures, the picture is black or frozen, or for 20 s neither the ball nor two players together were seen. The match-control buttons refuse while there is no picture. **Stop** ends the commentary at once: lines and pictures the page was still holding back for the picture delay are dropped. "Say nothing unless…" in the settings changes how many players are needed, or switches the check off.
+
+What happens (`webapp/live_engine.py`): every frame goes through the same detector, BoT-SORT + stable IDs, ball selection and kit-colour sampling as the offline scripts; the sound goes through `audio_cues.py` as it arrives; every 2 s the rules of `match_events.py`, `play_events.py`, `audio_events.py` and `penalty_kicks.py` are asked again about the last 4 minutes, and what is new becomes a line (`player_identity.py`), with a filler line in the silences (`fill_commentary.py`). Each line is spoken (the natural online voice, or the offline MMS voice) and sent to every open page.
+
+An event can only be said once its rule has seen enough: a whistle or a crowd roar about 9 s later, a goal (roar + celebration huddle) about 26 s later. So the page shows the picture a few seconds late (**Picture delay**, 10 s by default, per viewer) and each line lands on the moment it is about; set it to 30 s if goals should be called on time.
+
+**Match control** is for the person at the camera: kick-off, half-time, second half, penalty shootout and full time set the match clock (nothing is said before kick-off or in a break; in a shootout only the kicks are said), and the Goal / Yellow / Red / Corner / Free kick / Penalty buttons say in Bengali what one camera cannot see. The kit colours the system found can be corrected there too. With `--host 0.0.0.0` only the address with `?key=...` printed in the terminal has these buttons; everybody else can only watch.
+
+Not live yet: cards and the scoreboard (they scan the whole video), jersey numbers and names, the SoccerNet event model. Players are named by kit colour.
+
+Every session is kept in `outputs/live/<start time>/`: `commentary.json` (each line with the moment it is about and how many seconds later it was known), `events.json`, `summary.json` and the spoken lines.
+
+A video in the list marked "finished" already has `outputs/tracking/<name>_commentary.json` from the offline scripts; **Play the finished commentary** plays it back with its lines.
+
+### Desktop app
+
+`desktop/app.py` is the same page in a window of its own. It starts the server itself and stops it when the window is closed, so there is no terminal to keep open.
+
+```powershell
+pip install -r requirements-desktop.txt     # pywebview, a few MB; uses the WebView2 that Windows 10/11 already has
+python desktop/app.py                       # or double-click  desktop\Project R.bat
+python desktop/app.py --share               # phones and other PCs on the Wi-Fi can join
+python desktop/app.py --connect 192.168.0.5 # only a window onto the PC that runs the match
+powershell -ExecutionPolicy Bypass -File desktop\make_shortcut.ps1    # a "Project R" shortcut with the icon
+```
+
+`Project R.bat` uses the project's own Python (`.venv` or `venv` in the project folder, else the Python on PATH) and first checks that the web app is installed in it. If something is missing, its window stays open and prints the exact `pip install` line for that Python. If the app starts but then fails, a message box shows why, and the details are in `.cache/desktop/app.log` and `.cache/desktop/server.log`.
+
+**A slow picture?** The *Camera* box under the picture shows how many pictures a second camera 1 really gives, and how many the page shows (the camera tiles show it per camera). A low first number is the camera, not the PC: webcams slow down in poor light, and two webcams on one USB hub share its bandwidth. The page also says so in the notes after a few seconds.
+
+Without pywebview it opens an Edge or Chrome app window instead. Its settings and the server log stay in `.cache/desktop/` inside the project. (pywebview was chosen over Electron or Tauri because it needs no Node.js or Rust toolchain and no 300 MB browser of its own: the heavy part of this project is the Python engine, which has to be installed anyway.)
+
+### iPhone app
+
+`mobile/` wraps the same pages as an iPhone app that connects to the PC over Wi-Fi: watch, operate, or use the phone as camera 1, 2 or 3. See [mobile/README.md](mobile/README.md) for the no-install way (Safari → Add to Home Screen), the cloud build of the .ipa and how to put it on a phone from Windows.
+
+A phone's browser can also be a camera without the app: start the server with `--https` and open `camera.html` on the https address.
 
 ## 💾 Disk use
 
@@ -156,7 +223,9 @@ On test1.mp4 the model finds the corner after the 0:54 save, the foul at 1:28 an
 * **Crowd roar**: 3 dB louder than the median of the last 30 s for 1.5 s. On match1 the roars were at 4:04 and 4:37 (attacks near goal) and 7:38-7:48 (the goal at 7:49).
 * Model events are checked with them: a spotted foul or free kick needs a whistle nearby, a shot or corner a roar, and anything else (throw-in, goal kick) a confidence of 0.6, otherwise it is dropped. Two spots of the same type within 10 s are one event.
 * Where nothing else is said, a roar becomes `big_chance` ("the crowd is up, orange are attacking"), a whistle `whistle_stop` ("the referee stops play"), and a spell where one team keeps the ball `possession_spell`. These name the team, not a player, so they stay right on weak footage. `--no-audio` turns all this off.
-* Attacks the crowd did not roar for (`local_events.py`, needs `<name>_resnet152.npy` from `action_spotting.py`): a small model teaches itself on every match, with no hand-made labels. The pictures around the roars show what "the ball is near a goal" looks like from this camera in this ground; the model then finds the other moments that look the same and says an `attack` line there. Give `--kickoff` / `--pause` for the walkout, half-time and a shootout, or it learns from those roars too. `--no-picture` turns it off. On match4 (truth list of 48 events) the right lines went from 9 of 16 to 15 of 22 and the attacks mentioned from 5 to 11 of 24; on match5 in open play it added 2 lines, 1 right. Small numbers, and the settings were chosen on these two matches, so treat it as a first result.
+* Attacks the crowd did not roar for (`local_events.py`, needs `<name>_resnet152.npy` from `action_spotting.py`): a small model teaches itself on every match, with no hand-made labels. The pictures around the roars show what "the ball is near a goal" looks like from this camera in this ground; the model then finds the other moments that look the same and says an `attack` line there. Give `--kickoff` / `--pause` for the walkout and half-time, or it learns from those roars too (a shootout is found and left out by itself, see below). `--no-picture` turns it off. On match4 (truth list of 48 events) the right lines went from 9 of 16 to 15 of 22 and the attacks mentioned from 5 to 11 of 24; on match5 in open play it added 2 lines, 1 right. Small numbers, and the settings were chosen on these two matches, so treat it as a first result.
+* Attacks from player and ball positions (`position_events.py`, **off unless `--positions`**): six numbers from the tracks (players in view, where they stand, their size, ball off the middle, ball height, ball speed), each against the match's own average. Unlike the picture model these did carry over from one match to the other (clearest 10%: match4 11 of 15 right against 64% at random, match5 8 of 13 against 40%). In the whole pipeline it added 5 lines per match of which half were right and mentioned 3 more real shots, so the share of right lines fell slightly (67% to 65%, 71% to 67%). Kept for when the ball detector is better. Training on a labelled half of SoccerTrack v2 (fixed whole-pitch camera) did not carry over to local footage at all (0.8 to 1.0 times guessing).
+* **Penalty kicks and shootouts** (`penalty_kicks.py`, no model, no labels): before a penalty everybody stands and waits. The speed of the tracked players is measured in body heights per second (so the camera distance does not matter); a stretch of 12 s or more under 0.25 ends in the kick. Three or more such kicks, each within 3 minutes of the one before, are a shootout: it gets one `shootout_start` line and a `shootout_kick` line per kick, a strong roar far from every kick found counts as one more kick, and nothing else is said there (the roars and huddles in a shootout are not attacks or goals; no `--pause` is needed for it any more). A single long wait is a `penalty_kick` only if the crowd roars as it ends. `--no-penalties` turns it off. On the one shootout there is footage of (match5, 8 kicks) it finds all 8, each within 2 s, with none in the 11 minutes of open play before it and none in match4; the settings were chosen on that shootout, and a penalty in open play has not been seen yet, so that part is untested. Over the whole of match5 (only `--kickoff 1:22 --pause 7:13-7:25` given) the right lines went from 16 of 37 (43%) to 24 of 34 (71%) and the penalties mentioned from 0 to 8 of 8, because the wrong attack, whistle and goal lines in the shootout are gone as well. Whether the kick went in is not said (the crowd roars for a save too), and no team is named.
 
 **How right is the commentary?** Write down what really happens, then score the events against it:
 
@@ -166,7 +235,7 @@ python src/score_commentary.py --video data/videos/match5.mp4
 python src/review_events.py --video data/videos/match5.mp4 [--only wrong]   # watch every line with its verdict
 ```
 
-`mark_events.py` plays the video; press g goal, s shot, a attack, f foul, k free kick, c corner, t throw-in, o goal kick, x tackle, y card, w whistle (then 1 or 2 for the team), space to pause, j/l to jump 5 s, u to undo. Or write `outputs/tracking/<name>_truth.txt` by hand, one line per event (`7:49 goal orange`). `score_commentary.py` prints each line as right, wrong or wrong team (an event of a fitting type within a few seconds, e.g. "the referee stops play" fits a whistle, foul or free kick) and the share of right lines; passes, runs and possession lines are not checked.
+`mark_events.py` plays the video; press g goal, s shot, a attack, f foul, k free kick, c corner, t throw-in, o goal kick, x tackle, y card, w whistle, p penalty kick (then 1 or 2 for the team), space to pause, j/l to jump 5 s, u to undo. Or write `outputs/tracking/<name>_truth.txt` by hand, one line per event (`7:49 goal orange`). `score_commentary.py` prints each line as right, wrong or wrong team (an event of a fitting type within a few seconds, e.g. "the referee stops play" fits a whistle, foul or free kick) and the share of right lines; passes, runs and possession lines are not checked.
 
 ### Training on local matches
 
