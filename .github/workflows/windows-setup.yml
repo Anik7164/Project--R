@@ -45,12 +45,13 @@ jobs:
           $p = Start-Process .\ProjectR-Setup.exe -Wait -PassThru -ArgumentList "/VERYSILENT", "/SUPPRESSMSGBOXES", "/NORESTART", "/CURRENTUSER", "/DIR=D:\ProjectR", "/LOG=D:\install.log"
           Get-Content D:\ProjectR\setup.log -ErrorAction SilentlyContinue | Select-Object -Last 40
           if ($p.ExitCode -ne 0) { throw "setup exit code $($p.ExitCode)" }
-          if (-not (Test-Path D:\ProjectR\.venv\project-r-ready.txt)) { throw "Python set-up did not finish" }
+          if (-not (Test-Path D:\ProjectR\.venv\Scripts\project-r-ready.txt)) { throw "Python set-up did not finish" }
       - name: The app's server starts and loads the models
         shell: pwsh
         working-directory: D:\ProjectR
         run: |
           .venv\Scripts\python.exe desktop\app.py --check
+          $env:PYTHONUNBUFFERED = "1"   # the log shows each line as it comes
           $server = Start-Process .venv\Scripts\python.exe -ArgumentList "webapp\server.py", "--port", "8000" -PassThru -RedirectStandardOutput D:\server.log -RedirectStandardError D:\server.err
           $ok = $false
           # A cold CPU-only runner takes several minutes to load PyTorch and the models.
