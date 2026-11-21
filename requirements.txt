@@ -1,14 +1,64 @@
+# Project R: everything in one file (research scripts, models, web app,
+# desktop app, benchmarks).
+#
+#   pip install -r requirements.txt
+#   pip install --no-deps easyocr boxmot      # two last ones, without their own deps
+#
+# easyocr and boxmot come last and without dependencies because they would
+# replace the CUDA torch / OpenCV 5 below; all they need is in this list.
+# On Windows set the caches to the project drive first, e.g. in PowerShell:
+#   $env:PIP_CACHE_DIR = "$PWD\.cache\pip"; $env:TEMP = $env:TMP = "$PWD\.cache\tmp"
+# (Smaller lists for one part only: requirements-app.txt = just the live app.)
 
-# Core computer vision and GPU inference
+# --- Core: computer vision on the GPU (CUDA 13.2; RTX 50 cards included)
 --extra-index-url https://download.pytorch.org/whl/cu132
 torch==2.13.0+cu132
 torchvision==0.28.0+cu132
 ultralytics==8.4.175
 opencv-python==5.0.0.93
 numpy==2.2.6
-
-# LLM client used by the project
-ollama
 lap==0.5.13
-# Event spotting with the trained SoccerNet model (src/action_spotting.py, CPU is fine)
-tensorflow
+lapx>=0.5.5,<1
+
+# --- Models: ReID, shirt text, teams, event spotting
+timm>=1.0.15,<2           # PARSeq shirt-text recogniser, ReID backbones
+tensorflow                # SoccerNet event spotting (src/action_spotting.py, CPU is fine)
+scikit-learn>=1.3,<2
+joblib
+scipy
+scikit-image
+Pillow
+PyYAML
+Shapely
+pyclipper
+python-bidi
+ninja
+filterpy>=1.4.5,<2
+gdown>=5.1,<6
+huggingface-hub>=1.7.1
+pandas>=2,<3
+pyarrow>=18,<24
+platformdirs>=4.3,<5
+rich>=15
+
+# --- Speech and sound
+transformers>=4.40        # Bengali speech offline (Meta MMS-TTS)
+edge-tts>=6.1             # Bengali speech online (Microsoft neural voices)
+imageio-ffmpeg            # ffmpeg for match sound and putting commentary on video
+
+# --- LLM client
+ollama
+
+# --- Live web app and desktop app
+fastapi>=0.110
+uvicorn[standard]>=0.29   # with websockets
+python-multipart          # video upload from the page
+cryptography              # --https (a phone's browser as a camera)
+pywebview>=5.0            # the desktop app window (WebView2 on Windows)
+psutil                    # the server stops when the app window is gone
+
+# --- Data and benchmarks
+SoccerNet==0.2.0          # SoccerNet downloader + spotting evaluation
+trackeval @ git+https://github.com/JonathonLuiten/TrackEval.git   # HOTA / IDF1 / MOTA (1.0.dev1, needs git)
+motmetrics==1.4.0
+tabulate

@@ -41,7 +41,7 @@ exit /b 0
 :no_python
 echo No Python found. Make the project's venv first, in this folder:
 echo     python -m venv .venv
-echo     .venv\Scripts\pip install -r requirements.txt -r requirements-webapp.txt -r requirements-desktop.txt
+echo     .venv\Scripts\pip install -r requirements.txt
 echo.
 pause
 exit /b 1
@@ -49,7 +49,7 @@ exit /b 1
 :missing
 echo.
 echo Install what is missing into this Python, then double-click me again:
-echo     "%PY%" -m pip install -r requirements.txt -r requirements-webapp.txt -r requirements-desktop.txt
+echo     "%PY%" -m pip install -r requirements.txt
 echo.
 pause
 exit /b 1
