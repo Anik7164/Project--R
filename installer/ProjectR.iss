@@ -72,7 +72,7 @@ Source: "{#Root}\models\football_yolo26s.pt"; DestDir: "{app}\models"; Flags: ig
 Source: "{#Root}\yolo26n.pt"; DestDir: "{app}"; Flags: ignoreversion
 Source: "{#Root}\dataset.json"; DestDir: "{app}"; Flags: ignoreversion
 Source: "{#Root}\botsort_custom.yaml"; DestDir: "{app}"; Flags: ignoreversion
-Source: "{#Root}\requirements-app.txt"; DestDir: "{app}"; Flags: ignoreversion
+Source: "{#Root}\requirements.txt"; DestDir: "{app}"; Flags: ignoreversion
 Source: "{#Root}\README.md"; DestDir: "{app}"; Flags: ignoreversion
 Source: "{#Root}\LICENSE"; DestDir: "{app}"; Flags: ignoreversion
 Source: "{#Root}\installer\setup_runtime.ps1"; DestDir: "{app}\installer"; Flags: ignoreversion

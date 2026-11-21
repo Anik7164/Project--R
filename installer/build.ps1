@@ -81,8 +81,13 @@ if ($Offline) {
     Write-Host "PyTorch ($Torch) and the app's libraries into $runtime ..."
     & $uv pip install --python $py --break-system-packages "torch==2.13.0$tag" "torchvision==0.28.0$tag" --index-url $index
     if ($LASTEXITCODE -ne 0) { throw "Installing PyTorch failed." }
-    & $uv pip install --python $py --break-system-packages -r (Join-Path $root "requirements-app.txt")
+    # The project's one requirements.txt, without the torch lines (installed just above).
+    $list = Join-Path $env:TEMP "requirements-setup.txt"
+    Get-Content (Join-Path $root "requirements.txt") | Where-Object { $_ -notmatch '^\s*(torch|torchvision)==|extra-index-url' } | Set-Content $list
+    & $uv pip install --python $py --break-system-packages -r $list
     if ($LASTEXITCODE -ne 0) { throw "Installing the libraries failed." }
+    & $uv pip install --python $py --break-system-packages --no-deps easyocr boxmot
+    if ($LASTEXITCODE -ne 0) { throw "Installing easyocr and boxmot failed." }
     # The offline Bengali voice (Meta MMS, about 150 MB), so no first-use download.
     $voice = Join-Path $stage "huggingface"
     $env:HF_HOME = $voice

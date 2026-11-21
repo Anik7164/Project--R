@@ -14,7 +14,7 @@ on:
   push:
     paths:
       - "installer/**"
-      - "requirements-app.txt"
+      - "requirements.txt"
       - ".github/workflows/windows-setup.yml"
 
 jobs:

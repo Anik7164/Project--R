@@ -8,7 +8,7 @@
 # replace the CUDA torch / OpenCV 5 below; all they need is in this list.
 # On Windows set the caches to the project drive first, e.g. in PowerShell:
 #   $env:PIP_CACHE_DIR = "$PWD\.cache\pip"; $env:TEMP = $env:TMP = "$PWD\.cache\tmp"
-# (Smaller lists for one part only: requirements-app.txt = just the live app.)
+# The Windows setup file (installer\) installs this same list.
 
 # --- Core: computer vision on the GPU (CUDA 13.2; RTX 50 cards included)
 --extra-index-url https://download.pytorch.org/whl/cu132
@@ -59,6 +59,6 @@ psutil                    # the server stops when the app window is gone
 
 # --- Data and benchmarks
 SoccerNet==0.2.0          # SoccerNet downloader + spotting evaluation
-trackeval @ git+https://github.com/JonathonLuiten/TrackEval.git   # HOTA / IDF1 / MOTA (1.0.dev1, needs git)
+trackeval @ https://github.com/JonathonLuiten/TrackEval/archive/12c8791b303e0a0b50f753af204249e622d0281a.zip   # HOTA / IDF1 / MOTA (1.0.dev1)
 motmetrics==1.4.0
 tabulate

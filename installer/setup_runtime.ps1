@@ -42,8 +42,8 @@ Start-Transcript -Path $log -Force | Out-Null
 $failed = $false
 try {
     Write-Host "Project R set-up in $App"
-    Write-Host "This downloads Python and the AI libraries: about 1 GB without an NVIDIA card,"
-    Write-Host "about 3.5 GB with one. Keep this window open; it can take 5 to 20 minutes."
+    Write-Host "This downloads Python and the AI libraries: about 2 GB without an NVIDIA card,"
+    Write-Host "about 4.5 GB with one. Keep this window open; it can take 5 to 20 minutes."
     if (-not (Test-Path $uv)) { throw "uv.exe is missing from $uv. Install Project R again." }
 
     Step "Python 3.11"
@@ -67,7 +67,11 @@ try {
     }
 
     Step "The rest of the app"
-    Run $uv pip install --python $python @extra -r (Join-Path $App "requirements-app.txt")
+    # The project's one requirements.txt, without the torch lines (installed just above).
+    $list = Join-Path $env:TEMP "requirements-setup.txt"
+    Get-Content (Join-Path $App "requirements.txt") | Where-Object { $_ -notmatch '^\s*(torch|torchvision)==|extra-index-url' } | Set-Content $list
+    Run $uv pip install --python $python @extra -r $list
+    Run $uv pip install --python $python @extra --no-deps easyocr boxmot
 
     Step "Check"
     Push-Location $App
