@@ -1,0 +1,72 @@
+# Builds the iPhone app (mobile/) on a Mac in the cloud, because Xcode only
+# runs on macOS. The result is an unsigned .ipa under "Artifacts" of the run;
+# mobile/README.md says how to put it on an iPhone from Windows.
+#
+# It runs when mobile/ changes, or by hand: Actions > iPhone app > Run workflow
+# (do that after changing the pages in webapp/static, which the app ships).
+name: iPhone app
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths: ["mobile/**", ".github/workflows/ios-app.yml"]
+  pull_request:
+    paths: ["mobile/**", ".github/workflows/ios-app.yml"]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ios-app-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: macos-latest
+    timeout-minutes: 30
+    defaults:
+      run:
+        working-directory: mobile
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: mobile/package-lock.json
+
+      - name: Use the newest Xcode on the machine
+        run: |
+          newest=$(ls -d /Applications/Xcode*.app | sort -V | tail -1)
+          sudo xcode-select -s "$newest"
+          xcodebuild -version
+
+      - name: Web pages and Xcode project
+        run: |
+          npm ci
+          npm run ios
+          xcodebuild -list -project ios/App/App.xcodeproj
+
+      - name: Build the app (unsigned)
+        run: |
+          xcodebuild -project ios/App/App.xcodeproj -scheme App -configuration Release \
+            -sdk iphoneos -destination "generic/platform=iOS" -derivedDataPath build \
+            CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO CODE_SIGN_IDENTITY="" \
+            build | tail -40
+          test -d build/Build/Products/Release-iphoneos/App.app
+
+      - name: Pack the .ipa
+        run: |
+          mkdir Payload
+          cp -R build/Build/Products/Release-iphoneos/App.app Payload/
+          zip -qry ProjectR-unsigned.ipa Payload
+          ls -lh ProjectR-unsigned.ipa
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ProjectR-iPhone-app
+          path: mobile/ProjectR-unsigned.ipa
+          if-no-files-found: error
+          retention-days: 30

@@ -56,7 +56,7 @@ MAIN_ROLE = {
 }
 # Moments about a team, not a player: their lines never name a player.
 TEAM_EVENTS = {"big_chance", "attack", "whistle_stop", "possession_spell",
-               "goal_celebration"}
+               "goal_celebration", "penalty_kick", "shootout_kick", "shootout_start"}
 # Events about two players: {from_player} and {to_player}.
 SECOND_ROLE = {
     "pass": "receiver",
@@ -141,7 +141,8 @@ def fill_template(templates, minute, who, rng=random, extra=None, avoid=()):
 def _bengali_joins(text):
     """Templates attach "-এর" to a name ("{player}-এর"); after a common
     noun Bengali joins it: "খেলোয়াড়ের", "দলের"."""
-    return text.replace("খেলোয়াড়-এর", "খেলোয়াড়ের").replace("দল-এর", "দলের")
+    return (text.replace("খেলোয়াড়-এর", "খেলোয়াড়ের").replace("দল-এর", "দলের")
+            .replace("খেলোয়াড়-কে", "খেলোয়াড়কে"))
 
 
 def team_label(colour):

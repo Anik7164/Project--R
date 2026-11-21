@@ -45,12 +45,15 @@ STANDS_FOR = {
     "goal_kick": ({"goal_kick"}, (-15.0, 6.0)),
     "yellow_card": ({"card"}, (-30.0, 10.0)),
     "red_card": ({"card"}, (-30.0, 10.0)),
+    "penalty_kick": ({"penalty"}, (-6.0, 6.0)),
+    "shootout_kick": ({"penalty"}, (-6.0, 6.0)),
+    "shootout_start": ({"penalty"}, (0.0, 60.0)),
     "tackle_won": ({"tackle"}, (-3.0, 3.0)),
     "interception": ({"tackle"}, (-3.0, 3.0)),
 }
 NOT_CHECKED = {"match_intro", "pass", "long_pass", "run_with_ball", "possession_spell"}
 TRUTH_TYPES = {"goal", "shot", "attack", "foul", "freekick", "corner", "throw_in",
-               "goal_kick", "tackle", "card", "whistle"}
+               "goal_kick", "tackle", "card", "whistle", "penalty"}
 
 
 def parse_time(text):

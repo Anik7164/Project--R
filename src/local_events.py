@@ -52,7 +52,7 @@ STEP = 0.5                      # seconds; one ResNet feature per step
 # Which real events (score_commentary.py types) each group stands for,
 # and the commentary line a spotted group becomes.
 GROUPS = {
-    "attack": {"attack", "shot", "goal", "corner"},
+    "attack": {"attack", "shot", "goal", "corner", "penalty"},
     "stoppage": {"whistle", "foul", "freekick", "card"},
     "throw_in": {"throw_in"},
     "goal_kick": {"goal_kick"},

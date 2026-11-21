@@ -103,6 +103,12 @@ def _tones(samples, rate):
 
 
 def find_whistles(samples, rate=SAMPLE_RATE):
+    return referee_whistle(find_tones(samples, rate))
+
+
+def find_tones(samples, rate=SAMPLE_RATE):
+    """Every whistle-like tone, before keeping the referee's pitch (live
+    code collects these over the match and calls referee_whistle)."""
     step = HOP / rate
     max_gap = int(round(WHISTLE_GAP / step))
     runs, run, gap = [], None, 0
@@ -136,7 +142,7 @@ def find_whistles(samples, rate=SAMPLE_RATE):
                      "strength": round(float(w["strength"]), 1),
                      "duration": round(duration, 2),
                      "pitch": round(float(np.median(w["pitches"])))})
-    return referee_whistle(cues)
+    return cues
 
 
 def referee_whistle(cues):

@@ -1,0 +1,73 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Project R · camera</title>
+<link rel="manifest" href="/static/manifest.webmanifest">
+<meta name="theme-color" content="#0b1210">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<link rel="apple-touch-icon" href="/static/icon-180.png">
+<link rel="icon" type="image/png" href="/static/icon-192.png">
+<link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+<header class="top">
+  <div class="brand">
+    <span class="mark" aria-hidden="true"></span>
+    <div>
+      <h1>ক্যামেরা</h1>
+      <p>Project R · this device as a match camera</p>
+    </div>
+  </div>
+  <div class="top-right">
+    <button class="ghost server" id="serverName" hidden></button>
+    <div class="status" id="status"><span class="dot"></span><span id="statusText">Camera off</span></div>
+  </div>
+</header>
+
+<main class="camera-page">
+  <div class="stage">
+    <video id="view" playsinline muted autoplay></video>
+    <div class="idle" id="idle">
+      <p class="bn">ক্যামেরা বন্ধ</p>
+      <p id="idleText">Press “Start the camera”, then point this device at the pitch.</p>
+    </div>
+    <div class="badge" id="liveBadge" hidden><span></span><b>SENDING</b><small id="rate"></small></div>
+  </div>
+
+  <div class="panel">
+    <div class="row">
+      <label>Name of this camera
+        <input type="text" id="name" maxlength="40" placeholder="Phone">
+      </label>
+      <label>Which lens
+        <select id="lens">
+          <option value="environment">Back camera</option>
+          <option value="user">Front camera</option>
+        </select>
+      </label>
+      <label>Picture size
+        <select id="size">
+          <option value="1280">Sharp (1280 wide)</option>
+          <option value="960">Lighter for weak Wi-Fi (960 wide)</option>
+        </select>
+      </label>
+    </div>
+    <div class="actions">
+      <button class="primary" id="start">Start the camera</button>
+      <button class="danger" id="stop" disabled>Stop</button>
+      <a class="button ghost" id="matchPage" href="./">Back to the match</a>
+      <span class="error" id="error" role="alert"></span>
+    </div>
+    <p class="hint">While it is sending, this camera shows on the PC's match page in the lists for Camera 1 and Camera 2 as “Phone camera: <span id="shownName">Phone</span>”. Keep this page open and the screen on; a tripod helps a lot.</p>
+  </div>
+</main>
+
+<canvas id="grab" hidden></canvas>
+<script src="/static/shell.js"></script>
+<script src="/static/common.js"></script>
+<script src="/static/camera.js"></script>
+</body>
+</html>

@@ -9,6 +9,7 @@ Keys (the time saved is where the video is when you press):
     f foul        k free kick                  c corner
     t throw-in    o goal kick                  x tackle (ball won)
     y card        w whistle / play stops (other reasons)
+    p penalty kick (in play or in a shootout)
     1 / 2         right after an event key: which team (1 = first kit,
                   2 = second kit, as you name them at the start)
     space         pause / play          j / l   back / forward 5 s
@@ -21,7 +22,7 @@ instead: outputs/tracking/<name>_truth.txt, one event per line,
     7:49 goal orange
     5:03 foul
 (type from the keys above: goal shot attack foul freekick corner
-throw_in goal_kick tackle card whistle).
+throw_in goal_kick tackle card whistle penalty).
 
 Output: outputs/tracking/<name>_truth.json
 """
@@ -39,7 +40,7 @@ TRACKING_DIR = ROOT / "outputs" / "tracking"
 
 KEYS = {"g": "goal", "s": "shot", "a": "attack", "f": "foul", "k": "freekick",
         "c": "corner", "t": "throw_in", "o": "goal_kick", "x": "tackle",
-        "y": "card", "w": "whistle"}
+        "y": "card", "w": "whistle", "p": "penalty"}
 MAX_WIDTH = 1280
 
 
