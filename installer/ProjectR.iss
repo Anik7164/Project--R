@@ -25,7 +25,6 @@ DefaultGroupName=Project R
 DisableProgramGroupPage=yes
 ; Anyone can install it, no administrator needed; any folder or drive can be chosen.
 PrivilegesRequired=lowest
-PrivilegesRequiredOverridesAllowed=dialog
 DisableDirPage=no
 #ifdef Offline
   #if Torch == "cpu"
@@ -59,7 +58,7 @@ ExtraDiskSpaceRequired=6000000000
 #endif
 
 [Messages]
-SelectDirDesc=Where should Project R go? Python and the AI libraries (up to 6 GB) go into the same folder.
+SelectDirDesc=Where should Project R go? Python and the AI libraries (up to 6 GB) go into the same folder. Pick a folder of your own (for example F:\Project R), not Program Files.
 
 [Tasks]
 Name: "desktopicon"; Description: "Make a desktop icon"; GroupDescription: "Icons:"
@@ -83,9 +82,12 @@ Source: "{#Voice}\*"; DestDir: "{app}\.cache\huggingface"; Flags: recursesubdirs
 #endif
 
 [Dirs]
+; The app writes its caches, settings and saved matches inside its folder:
+; every user may write there, also when it was put under Program Files.
+Name: "{app}\.cache"; Permissions: users-modify
 ; Videos to play as a match, and the saved matches, are the user's: kept on uninstall.
-Name: "{app}\data\videos"; Flags: uninsneveruninstall
-Name: "{app}\outputs"; Flags: uninsneveruninstall
+Name: "{app}\data\videos"; Permissions: users-modify; Flags: uninsneveruninstall
+Name: "{app}\outputs"; Permissions: users-modify; Flags: uninsneveruninstall
 
 [Icons]
 Name: "{group}\Project R"; Filename: "{app}\desktop\Project R.bat"; WorkingDir: "{app}"; IconFilename: "{app}\desktop\icon.ico"; Flags: runminimized

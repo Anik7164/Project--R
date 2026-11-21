@@ -37,8 +37,8 @@ import urllib.request  # noqa: E402
 
 TITLE = "Project R · লাইভ ধারাভাষ্য"
 SERVER = ROOT / "webapp" / "server.py"
-FOLDER = ROOT / ".cache" / "desktop"
-KEY_FILE = ROOT / ".cache" / "webapp-operator-key.txt"
+FOLDER = project_cache.CACHE / "desktop"
+KEY_FILE = project_cache.CACHE / "webapp-operator-key.txt"
 PORT = 8000
 START_SECONDS = 90.0     # a cold start on a slow disk
 

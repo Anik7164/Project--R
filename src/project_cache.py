@@ -17,6 +17,23 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent
 CACHE = ROOT / ".cache"
 
+
+def _writable(folder):
+    try:
+        folder.mkdir(parents=True, exist_ok=True)
+        probe = folder / ".write-test"
+        probe.write_text("", encoding="utf-8")
+        probe.unlink()
+        return True
+    except OSError:
+        return False
+
+
+# Installed where this user cannot write (Program Files): the user's own
+# app-data folder instead, so the app still starts.
+if not _writable(CACHE):
+    CACHE = Path(os.environ.get("LOCALAPPDATA") or Path.home()) / "Project R" / "cache"
+
 _LOCATIONS = {
     "TORCH_HOME": "torch",
     "HF_HOME": "huggingface",

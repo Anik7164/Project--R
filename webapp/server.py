@@ -564,7 +564,7 @@ def lan_address():
 def operator_key():
     """The same key every time the server starts, so a phone that was
     given the operator address once keeps working. Kept in .cache."""
-    path = ROOT / ".cache" / "webapp-operator-key.txt"
+    path = project_cache.CACHE / "webapp-operator-key.txt"
     try:
         key = path.read_text(encoding="utf-8").strip()
         if key:
@@ -591,7 +591,7 @@ def certificate(address, folder=None):
     from cryptography.hazmat.primitives.asymmetric import rsa
     from cryptography.x509.oid import NameOID
 
-    folder = folder or ROOT / ".cache" / "webapp-https"
+    folder = folder or project_cache.CACHE / "webapp-https"
     cert_file, key_file, made_for = folder / "cert.pem", folder / "key.pem", folder / "address.txt"
     try:
         if cert_file.exists() and key_file.exists() and made_for.read_text().strip() == address:
