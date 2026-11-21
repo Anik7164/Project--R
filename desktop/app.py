@@ -146,8 +146,40 @@ def app_browser():
     return None
 
 
-def show_window(address, title=TITLE):
-    """Blocks until the window is closed. Returns how it was shown."""
+SPLASH = """<!doctype html><meta charset="utf-8"><title>Project R</title>
+<body style="margin:0;height:100vh;display:flex;align-items:center;justify-content:center;
+background:#0b1210;color:#e8f0ec;font:18px system-ui,'Segoe UI',sans-serif">
+<div style="text-align:center"><div style="font-size:34px;font-weight:700;margin-bottom:14px">Project R</div>
+<div id="t">Starting the commentary server&hellip;</div>
+<div style="opacity:.6;font-size:14px;margin-top:10px">The first start can take a minute while the models load.</div>
+</div></body>"""
+
+
+def problem_page(text):
+    import html
+
+    return ("<!doctype html><meta charset='utf-8'><body style='margin:0;padding:28px;background:#0b1210;"
+            "color:#e8f0ec;font:16px system-ui,sans-serif'><h2 style='color:#ff8a80'>Project R could not "
+            "start</h2><pre style='white-space:pre-wrap;font-size:13px'>" + html.escape(text) +
+            "</pre><p>Close this window, fix the problem, then start Project R again.</p></body>")
+
+
+def show_window(prepare, title=TITLE):
+    """Opens the window at once with a "Starting..." page, runs prepare()
+    (which starts the server and returns its address, or raises with the
+    reason) and then shows the app. Blocks until the window is closed."""
+    result = {}
+
+    def get_address():
+        if "address" not in result and "error" not in result:
+            try:
+                result["address"] = prepare()
+            except Exception as error:      # shown in the window, not lost
+                result["error"] = str(error) or type(error).__name__
+        if "error" in result:
+            raise RuntimeError(result["error"])
+        return result["address"]
+
     try:
         import webview
     except ImportError:
@@ -157,17 +189,27 @@ def show_window(address, title=TITLE):
         storage = FOLDER / "webview"
         storage.mkdir(parents=True, exist_ok=True)
         try:
-            webview.create_window(title, address, width=1440, height=940, min_size=(900, 600),
-                                  background_color="#0b1210", text_select=True)
+            window = webview.create_window(title, html=SPLASH, width=1440, height=940,
+                                           min_size=(900, 600), background_color="#0b1210",
+                                           text_select=True)
+
+            def work():
+                try:
+                    window.load_url(get_address())
+                except Exception as error:
+                    print(f"Project R could not start: {error}")
+                    window.load_html(problem_page(str(error)))
+
             try:
-                webview.start(private_mode=False, storage_path=str(storage),
+                webview.start(work, private_mode=False, storage_path=str(storage),
                               icon=str(ROOT / "desktop" / "icon.png"))
             except TypeError:               # an older pywebview
-                webview.start()
+                webview.start(work)
             return "window"
         except Exception as error:          # no window system it can use: the browser instead
             print(f"pywebview could not open a window ({type(error).__name__}: {error}). "
                   "Using a browser window.")
+    address = get_address()
     browser = os.environ.get("PROJECT_R_BROWSER") or app_browser()
     if browser is not None:
         profile = FOLDER / "browser"
@@ -239,36 +281,43 @@ def main(argv=None):
     if args.check:
         return check()
 
-    process = None
-    if args.connect:
-        address = remote_address(args.connect)
-        if not answers(address, timeout=5):
-            tell(f"No Project R server answers at {address}.\n"
-                 "Start it there with --share (or: python webapp/server.py --host 0.0.0.0).")
-            return 1
-    else:
+    server = {}
+
+    def prepare():
+        """Starts the server (unless one already answers); its address."""
+        if args.connect:
+            address = remote_address(args.connect)
+            if not answers(address, timeout=5):
+                raise RuntimeError(f"No Project R server answers at {address}.\n"
+                                   "Start it there with --share "
+                                   "(or: python webapp/server.py --host 0.0.0.0).")
+            return address
         address = f"http://127.0.0.1:{args.port}"
-        if answers(address):
-            pass                            # already running (a second window, or a terminal)
-        else:
+        if not answers(address):            # else already running (a second window, or a terminal)
             port = free_port(args.port)
             address = f"http://127.0.0.1:{port}"
             log_path = FOLDER / "server.log"
-            process = start_server(port, args.share, log_path)
-            if not wait_until_up(address, process):
-                stop_server(process)
+            print(f"Starting the commentary server on {address} (log: {log_path})")
+            server["process"] = start_server(port, args.share, log_path)
+            if not wait_until_up(address, server["process"]):
+                stop_server(server["process"])
                 tail = "\n".join(log_path.read_text(encoding="utf-8", errors="replace")
-                                 .splitlines()[-12:])
-                tell("The commentary server did not start.\n\n" + tail +
-                     f"\n\nFull log: {log_path}\n"
-                     "Is the web app installed?  pip install -r requirements.txt")
-                return 1
+                                 .splitlines()[-15:])
+                raise RuntimeError("The commentary server did not start.\n\n" + tail +
+                                   f"\n\nFull log: {log_path}\n"
+                                   "Is everything installed?  pip install -r requirements.txt")
+            print("Server is up.")
         if args.share and operator_key():
             address += f"/?key={operator_key()}"    # this window is the operator's
+        return address
+
     try:
-        show_window(address)
+        show_window(prepare)
+    except RuntimeError as error:           # no app window could show it: a message box
+        tell(str(error))
+        return 1
     finally:
-        stop_server(process)
+        stop_server(server.get("process"))
     return 0
 
 

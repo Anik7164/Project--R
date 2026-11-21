@@ -26,6 +26,14 @@
       "command": "${workspaceFolder}\\desktop\\Project R.bat",
       "options": { "cwd": "${workspaceFolder}" },
       "problemMatcher": []
+    },
+    {
+      "label": "Start Project R (show messages and errors)",
+      "type": "shell",
+      "command": "${workspaceFolder}\\desktop\\Project R.bat",
+      "args": ["--console"],
+      "options": { "cwd": "${workspaceFolder}" },
+      "problemMatcher": []
     }
   ]
 }

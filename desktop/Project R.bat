@@ -30,11 +30,24 @@ if not defined PY goto no_python
 "%PY%" "desktop\app.py" --check
 if errorlevel 1 goto missing
 
+rem "Project R.bat" --console  runs it in this window, so every message and error shows.
+if /i "%~1"=="--console" (
+  shift
+  echo Starting Project R in this window. Close the app window to stop.
+  "%PY%" "desktop\app.py" %2 %3 %4 %5
+  echo.
+  echo Project R stopped.
+  pause
+  exit /b 0
+)
+
 rem pythonw: the same Python without a console window.
 set "PYW=%PY:python.exe=pythonw.exe%"
 set "PYW=%PYW:\py.exe=\pyw.exe%"
 if not exist "%PYW%" set "PYW=%PY%"
-echo Starting Project R...
+echo Starting Project R... the window opens in a few seconds.
+echo If it does not, run:  "desktop\Project R.bat" --console
+echo and the problem shows here. Log: .cache\desktop\app.log
 start "" "%PYW%" "desktop\app.py" %*
 exit /b 0
 
