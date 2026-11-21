@@ -6,6 +6,11 @@ name: Windows setup file
 
 on:
   workflow_dispatch:
+    inputs:
+      offline:
+        description: "Also build the offline setup (everything inside, about 3 GB)"
+        type: boolean
+        default: true
   push:
     paths:
       - "installer/**"
@@ -67,3 +72,31 @@ jobs:
           Start-Sleep 5
           Get-ChildItem D:\ProjectR -Force -ErrorAction SilentlyContinue | ForEach-Object { $_.Name }
           if (Test-Path D:\ProjectR\.venv) { throw ".venv left behind" }
+
+  offline:
+    if: github.event_name == 'workflow_dispatch' && inputs.offline
+    runs-on: windows-latest
+    timeout-minutes: 150
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build the offline setup (Python, PyTorch with CUDA and the voice inside)
+        shell: pwsh
+        run: powershell -NoProfile -ExecutionPolicy Bypass -File installer\build.ps1 -Offline -Version "1.0.${{ github.run_number }}"
+      - name: Install it and check it works with no internet
+        shell: pwsh
+        run: |
+          $p = Start-Process dist\ProjectR-Offline\ProjectR-Setup.exe -Wait -PassThru -ArgumentList "/VERYSILENT", "/SUPPRESSMSGBOXES", "/NORESTART", "/CURRENTUSER", "/DIR=D:\ProjectR"
+          if ($p.ExitCode -ne 0) { throw "setup exit code $($p.ExitCode)" }
+          $env:HTTPS_PROXY = $env:HTTP_PROXY = "http://127.0.0.1:9"   # no internet for the check
+          $env:HF_HUB_OFFLINE = "1"
+          Set-Location D:\ProjectR
+          runtime\python.exe desktop\app.py --check
+          if ($LASTEXITCODE -ne 0) { throw "check failed" }
+          runtime\python.exe -c "import sys; sys.path.insert(0, 'src'); import project_cache; from transformers import VitsModel; VitsModel.from_pretrained('facebook/mms-tts-ben'); import torch, ultralytics; print('offline OK, torch', torch.__version__)"
+          if ($LASTEXITCODE -ne 0) { throw "offline import failed" }
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ProjectR-Offline
+          path: dist/ProjectR-Offline/
+          retention-days: 14
+          compression-level: 0

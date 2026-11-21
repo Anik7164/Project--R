@@ -11,6 +11,8 @@ title Project R
 cd /d "%~dp0.."
 
 set "PY="
+rem The offline setup file brings its own Python in runtime\.
+if exist "runtime\python.exe" set "PY=%CD%\runtime\python.exe"
 for %%V in (".venv" "venv" "env" "..\.venv" "..\venv") do (
   if not defined PY if exist "%%~V\Scripts\python.exe" set "PY=%%~fV\Scripts\python.exe"
 )

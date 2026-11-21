@@ -17,6 +17,10 @@ $App = (Resolve-Path $App).Path
 $uv = Join-Path $App "installer\bin\uv.exe"
 $venv = Join-Path $App ".venv"
 $python = Join-Path $venv "Scripts\python.exe"
+# An offline install brought its own Python (runtime\): repair that one.
+$bundled = Join-Path $App "runtime\python.exe"
+$extra = @()
+if (Test-Path $bundled) { $python = $bundled; $extra = @("--break-system-packages") }
 $log = Join-Path $App "setup.log"
 
 # Downloads, caches and temporary files stay in the app folder.
@@ -41,8 +45,10 @@ try {
     if (-not (Test-Path $uv)) { throw "uv.exe is missing from $uv. Install Project R again." }
 
     Step "Python 3.11"
-    Run $uv python install 3.11
-    Run $uv venv --python 3.11 --allow-existing $venv
+    if (-not (Test-Path $bundled)) {
+        Run $uv python install 3.11
+        Run $uv venv --python 3.11 --allow-existing $venv
+    }
 
     # PyTorch: with CUDA for an NVIDIA card (the same build the project uses), else for the CPU.
     $smi = Get-Command nvidia-smi.exe -ErrorAction SilentlyContinue
@@ -52,14 +58,14 @@ try {
     $cuda = ($Torch -eq "cuda") -or ($Torch -eq "auto" -and $gpu)
     if ($cuda) {
         Step "PyTorch for the NVIDIA card ($gpu), about 2.5 GB"
-        Run $uv pip install --python $python "torch==2.13.0+cu132" "torchvision==0.28.0+cu132" --index-url https://download.pytorch.org/whl/cu132
+        Run $uv pip install --python $python @extra "torch==2.13.0+cu132" "torchvision==0.28.0+cu132" --index-url https://download.pytorch.org/whl/cu132
     } else {
         Step "PyTorch for the CPU (no NVIDIA card found: the commentary runs, but slower)"
-        Run $uv pip install --python $python "torch==2.13.0" "torchvision==0.28.0" --index-url https://download.pytorch.org/whl/cpu
+        Run $uv pip install --python $python @extra "torch==2.13.0" "torchvision==0.28.0" --index-url https://download.pytorch.org/whl/cpu
     }
 
     Step "The rest of the app"
-    Run $uv pip install --python $python -r (Join-Path $App "requirements-app.txt")
+    Run $uv pip install --python $python @extra -r (Join-Path $App "requirements-app.txt")
 
     Step "Check"
     Push-Location $App
@@ -72,7 +78,7 @@ try {
             Write-Host "then run 'Repair Project R' from the Start menu." -ForegroundColor Yellow
         }
     } finally { Pop-Location }
-    Set-Content -Path (Join-Path $venv "project-r-ready.txt") -Value (Get-Date -Format s)
+    Set-Content -Path (Join-Path (Split-Path -Parent $python) "project-r-ready.txt") -Value (Get-Date -Format s)
     Write-Host ""
     Write-Host "Project R is ready. Start it from the Start menu or the desktop icon." -ForegroundColor Green
 } catch {

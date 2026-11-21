@@ -12,6 +12,15 @@
       "problemMatcher": []
     },
     {
+      "label": "Build offline setup file (everything inside, about 3 GB)",
+      "type": "shell",
+      "command": "powershell",
+      "args": ["-NoProfile", "-ExecutionPolicy", "Bypass", "-File", "${workspaceFolder}\\installer\\build.ps1", "-Offline"],
+      "options": { "cwd": "${workspaceFolder}" },
+      "group": "build",
+      "problemMatcher": []
+    },
+    {
       "label": "Start Project R (desktop app)",
       "type": "shell",
       "command": "${workspaceFolder}\\desktop\\Project R.bat",
