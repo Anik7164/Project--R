@@ -20,11 +20,15 @@ AppName=Project R
 AppVersion={#MyVersion}
 AppVerName=Project R {#MyVersion}
 AppPublisher=Project R (NSU CSE498R)
-DefaultDirName={localappdata}\Programs\Project R
+DefaultDirName={autopf}\Project R
 DefaultGroupName=Project R
 DisableProgramGroupPage=yes
-; Anyone can install it, no administrator needed; any folder or drive can be chosen.
+; "Only for me" needs no administrator (AppData, or any folder or drive).
+; "For all users" asks for administrator rights and installs into Program Files;
+; the setup then gives every user write access to the Project R folder.
 PrivilegesRequired=lowest
+PrivilegesRequiredOverridesAllowed=dialog commandline
+UsePreviousPrivileges=yes
 DisableDirPage=no
 #ifdef Offline
   #if Torch == "cpu"
@@ -58,7 +62,7 @@ ExtraDiskSpaceRequired=6000000000
 #endif
 
 [Messages]
-SelectDirDesc=Where should Project R go? Python and the AI libraries (up to 6 GB) go into the same folder. Pick a folder of your own (for example F:\Project R), not Program Files.
+SelectDirDesc=Where should Project R go? Python and the AI libraries (up to 6 GB) go into the same folder. Any drive works (for example F:\Project R).
 
 [Tasks]
 Name: "desktopicon"; Description: "Make a desktop icon"; GroupDescription: "Icons:"
@@ -82,8 +86,9 @@ Source: "{#Voice}\*"; DestDir: "{app}\.cache\huggingface"; Flags: recursesubdirs
 #endif
 
 [Dirs]
-; The app writes its caches, settings and saved matches inside its folder:
-; every user may write there, also when it was put under Program Files.
+; The app writes its caches, settings, Python and saved matches inside its
+; folder: every user may write there, also under Program Files.
+Name: "{app}"; Permissions: users-modify
 Name: "{app}\.cache"; Permissions: users-modify
 ; Videos to play as a match, and the saved matches, are the user's: kept on uninstall.
 Name: "{app}\data\videos"; Permissions: users-modify; Flags: uninsneveruninstall
@@ -100,7 +105,7 @@ Name: "{autodesktop}\Project R"; Filename: "{app}\desktop\Project R.bat"; Workin
 #ifndef Offline
 Filename: "powershell.exe"; Parameters: "-NoProfile -ExecutionPolicy Bypass -File ""{app}\installer\setup_runtime.ps1"" -App ""{app}"""; WorkingDir: "{app}"; StatusMsg: "Setting up Python and the AI libraries (a few GB, 5 to 20 minutes). Keep the black window open."; Flags: waituntilterminated
 #endif
-Filename: "{app}\desktop\Project R.bat"; WorkingDir: "{app}"; Description: "Start Project R now"; Flags: postinstall nowait skipifsilent runminimized shellexec
+Filename: "{app}\desktop\Project R.bat"; WorkingDir: "{app}"; Description: "Start Project R now"; Flags: postinstall nowait skipifsilent runminimized shellexec runasoriginaluser
 
 [UninstallDelete]
 ; What the set-up downloaded. Videos and saved matches (data, outputs) stay.
@@ -109,3 +114,24 @@ Type: filesandordirs; Name: "{app}\runtime"
 Type: filesandordirs; Name: "{app}\python"
 Type: filesandordirs; Name: "{app}\.cache"
 Type: files; Name: "{app}\setup.log"
+
+[Code]
+// "Only for me" cannot write into Program Files: say how, instead of failing halfway.
+function NextButtonClick(CurPageID: Integer): Boolean;
+var
+  Dir: String;
+begin
+  Result := True;
+  if (CurPageID = wpSelectDir) and not IsAdminInstallMode then
+  begin
+    Dir := Lowercase(AddBackslash(WizardDirValue));
+    if (Pos(Lowercase(AddBackslash(ExpandConstant('{commonpf32}'))), Dir) = 1) or
+       (Pos(Lowercase(AddBackslash(ExpandConstant('{commonpf64}'))), Dir) = 1) then
+    begin
+      MsgBox('Program Files needs administrator rights.' + #13#10#13#10 +
+             'Close this setup, start it again and choose "Install for all users", ' +
+             'or pick another folder (for example F:\Project R).', mbError, MB_OK);
+      Result := False;
+    end;
+  end;
+end;

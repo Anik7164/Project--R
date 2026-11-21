@@ -86,11 +86,14 @@ jobs:
       - name: Install it and check it works with no internet
         shell: pwsh
         run: |
-          $p = Start-Process dist\ProjectR-Offline\ProjectR-Setup.exe -Wait -PassThru -ArgumentList "/VERYSILENT", "/SUPPRESSMSGBOXES", "/NORESTART", "/CURRENTUSER", "/DIR=D:\ProjectR"
+          $p = Start-Process dist\ProjectR-Offline\ProjectR-Setup.exe -Wait -PassThru -ArgumentList "/VERYSILENT", "/SUPPRESSMSGBOXES", "/NORESTART", "/ALLUSERS", "/DIR=C:\Program Files\Project R"
           if ($p.ExitCode -ne 0) { throw "setup exit code $($p.ExitCode)" }
+          # "For all users" into Program Files: every user must be able to write there.
+          $acl = (Get-Acl "C:\Program Files\Project R").Access | Where-Object { $_.IdentityReference -match "Users" -and $_.FileSystemRights -match "Modify" }
+          if (-not $acl) { throw "Users cannot write into C:\Program Files\Project R" }
           $env:HTTPS_PROXY = $env:HTTP_PROXY = "http://127.0.0.1:9"   # no internet for the check
           $env:HF_HUB_OFFLINE = "1"
-          Set-Location D:\ProjectR
+          Set-Location "C:\Program Files\Project R"
           runtime\python.exe desktop\app.py --check
           if ($LASTEXITCODE -ne 0) { throw "check failed" }
           runtime\python.exe -c "import sys; sys.path.insert(0, 'src'); import project_cache; from transformers import VitsModel; VitsModel.from_pretrained('facebook/mms-tts-ben'); import torch, ultralytics; print('offline OK, torch', torch.__version__)"
