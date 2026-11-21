@@ -103,6 +103,15 @@ powershell -ExecutionPolicy Bypass -File desktop\make_shortcut.ps1    # a "Proje
 
 Without pywebview it opens an Edge or Chrome app window instead. Its settings and the server log stay in `.cache/desktop/` inside the project. (pywebview was chosen over Electron or Tauri because it needs no Node.js or Rust toolchain and no 300 MB browser of its own: the heavy part of this project is the Python engine, which has to be installed anyway.)
 
+### Setup file for friends (Windows)
+
+`dist\ProjectR-Setup.exe` installs the desktop app on any Windows 10/11 PC, no Python or VS Code needed. To make it:
+
+- **In VS Code:** Terminal → Run Task… → **Build setup file** (or `powershell -ExecutionPolicy Bypass -File installer\build.ps1`). The first time it fetches uv and Inno Setup into `.cache\tools` and `installer\bin` inside the project, nothing onto C:.
+- **On GitHub:** Actions → **Windows setup file** → Run workflow. It builds the file, installs it on a clean Windows machine to check it, and puts it under the run's *Artifacts*.
+
+The file is about 30 MB. On the friend's PC it asks for a folder (any drive), copies the app, then downloads Python and the AI libraries into that same folder: PyTorch with CUDA when there is an NVIDIA card (about 3.5 GB in all, driver 580 or newer), the CPU build otherwise (about 1 GB, slower commentary). Then it adds Start menu entries (Project R, Project R for phones on the Wi-Fi, Repair, Uninstall) and a desktop icon. Uninstall removes the downloads but keeps the videos and saved matches. The file is not signed, so Windows may show "Windows protected your PC": click *More info* → *Run anyway*.
+
 ### iPhone app
 
 `mobile/` wraps the same pages as an iPhone app that connects to the PC over Wi-Fi: watch, operate, or use the phone as camera 1, 2 or 3. See [mobile/README.md](mobile/README.md) for the no-install way (Safari → Add to Home Screen), the cloud build of the .ipa and how to put it on a phone from Windows.

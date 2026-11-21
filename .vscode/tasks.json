@@ -1,0 +1,22 @@
+{
+  // Terminal > Run Task... > "Build setup file": makes dist\ProjectR-Setup.exe.
+  "version": "2.0.0",
+  "tasks": [
+    {
+      "label": "Build setup file",
+      "type": "shell",
+      "command": "powershell",
+      "args": ["-NoProfile", "-ExecutionPolicy", "Bypass", "-File", "${workspaceFolder}\\installer\\build.ps1"],
+      "options": { "cwd": "${workspaceFolder}" },
+      "group": { "kind": "build", "isDefault": true },
+      "problemMatcher": []
+    },
+    {
+      "label": "Start Project R (desktop app)",
+      "type": "shell",
+      "command": "${workspaceFolder}\\desktop\\Project R.bat",
+      "options": { "cwd": "${workspaceFolder}" },
+      "problemMatcher": []
+    }
+  ]
+}

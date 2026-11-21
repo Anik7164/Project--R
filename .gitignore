@@ -12,7 +12,8 @@ env/
 !.env.example
 
 # Editors and operating system
-.vscode/
+.vscode/*
+!.vscode/tasks.json
 .idea/
 Thumbs.db
 .DS_Store
@@ -55,3 +56,7 @@ data/SoccerNet/
 data/football_det/
 data/local_det/
 data/football_local/
+
+# The Windows setup file and what its build fetches
+dist/
+installer/bin/

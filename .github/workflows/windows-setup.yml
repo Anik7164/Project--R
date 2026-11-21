@@ -1,0 +1,69 @@
+# Builds the Windows setup file (dist\ProjectR-Setup.exe) the same way
+# installer\build.ps1 does on a PC, then installs it on a clean Windows
+# machine and checks that the app starts. Download it from the run's
+# "Artifacts". Run it by hand: Actions > Windows setup file > Run workflow.
+name: Windows setup file
+
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - "installer/**"
+      - "requirements-app.txt"
+      - ".github/workflows/windows-setup.yml"
+
+jobs:
+  build:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build the setup file
+        shell: pwsh
+        run: powershell -NoProfile -ExecutionPolicy Bypass -File installer\build.ps1 -Version "1.0.${{ github.run_number }}"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ProjectR-Setup
+          path: dist/ProjectR-Setup.exe
+          retention-days: 30
+
+  test-install:
+    needs: build
+    runs-on: windows-latest
+    timeout-minutes: 90
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: ProjectR-Setup
+      - name: Install silently into D:\ProjectR (as a friend would, minus the clicks)
+        shell: pwsh
+        run: |
+          $p = Start-Process .\ProjectR-Setup.exe -Wait -PassThru -ArgumentList "/VERYSILENT", "/SUPPRESSMSGBOXES", "/NORESTART", "/CURRENTUSER", "/DIR=D:\ProjectR", "/LOG=D:\install.log"
+          Get-Content D:\ProjectR\setup.log -ErrorAction SilentlyContinue | Select-Object -Last 40
+          if ($p.ExitCode -ne 0) { throw "setup exit code $($p.ExitCode)" }
+          if (-not (Test-Path D:\ProjectR\.venv\project-r-ready.txt)) { throw "Python set-up did not finish" }
+      - name: The app's server starts and loads the models
+        shell: pwsh
+        working-directory: D:\ProjectR
+        run: |
+          .venv\Scripts\python.exe desktop\app.py --check
+          $server = Start-Process .venv\Scripts\python.exe -ArgumentList "webapp\server.py", "--port", "8000" -PassThru -RedirectStandardOutput D:\server.log -RedirectStandardError D:\server.err
+          $ok = $false
+          # A cold CPU-only runner takes several minutes to load PyTorch and the models.
+          foreach ($i in 1..300) {
+            Start-Sleep 3
+            $text = (Get-Content D:\server.log, D:\server.err -Raw -ErrorAction SilentlyContinue) -join "`n"
+            if ($text -match "models ready") { $ok = $true; break }
+            if ($text -match "could not load the models") { break }
+          }
+          Get-Content D:\server.log, D:\server.err -ErrorAction SilentlyContinue | Select-Object -Last 30
+          $state = Invoke-RestMethod http://127.0.0.1:8000/api/state
+          Write-Host "operator: $($state.operator)"
+          Stop-Process $server.Id -Force
+          if (-not $ok) { throw "the models did not load" }
+      - name: Uninstall keeps nothing but the user's videos and matches
+        shell: pwsh
+        run: |
+          $p = Start-Process D:\ProjectR\unins000.exe -Wait -PassThru -ArgumentList "/VERYSILENT", "/SUPPRESSMSGBOXES", "/NORESTART"
+          Start-Sleep 5
+          Get-ChildItem D:\ProjectR -Force -ErrorAction SilentlyContinue | ForEach-Object { $_.Name }
+          if (Test-Path D:\ProjectR\.venv) { throw ".venv left behind" }
