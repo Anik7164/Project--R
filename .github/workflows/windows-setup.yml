@@ -1,7 +1,8 @@
 # Builds the Windows setup file (dist\ProjectR-Setup.exe) the same way
 # installer\build.ps1 does on a PC, then installs it on a clean Windows
 # machine and checks that the app starts. Download it from the run's
-# "Artifacts". Run it by hand: Actions > Windows setup file > Run workflow.
+# "Artifacts". Only by hand: Actions > Windows setup file > Run workflow.
+# (Not on every push: the setup file is built in VS Code, Ctrl+Shift+B.)
 name: Windows setup file
 
 on:
@@ -11,11 +12,6 @@ on:
         description: "Also build the offline setup (everything inside, about 3 GB)"
         type: boolean
         default: true
-  push:
-    paths:
-      - "installer/**"
-      - "requirements.txt"
-      - ".github/workflows/windows-setup.yml"
 
 jobs:
   build:
