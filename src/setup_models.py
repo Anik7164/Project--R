@@ -37,11 +37,9 @@ def install(benchmarks=False):
     # project_cache.py points PIP_CACHE_DIR and TEMP into .cache; pip
     # inherits that.
     pip = [sys.executable, "-m", "pip", "install"]
-    subprocess.run(pip + ["-r", str(ROOT / "requirements-models.txt")], check=True)
+    # Everything is in the one requirements.txt (benchmarks included).
+    subprocess.run(pip + ["-r", str(ROOT / "requirements.txt")], check=True)
     subprocess.run(pip + ["--no-deps"] + NO_DEPS, check=True)
-    if benchmarks:
-        subprocess.run(pip + ["-r", str(ROOT / "requirements-benchmarks.txt")],
-                       check=True)
 
 
 def step(name, action):

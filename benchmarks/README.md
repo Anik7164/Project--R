@@ -11,7 +11,7 @@ $env:PIP_CACHE_DIR = "$PWD\.cache\pip"; $env:TEMP = "$PWD\.cache\tmp"; $env:TMP 
 python benchmarks/setup_models.py --install
 ```
 
-This installs `requirements-benchmarks.txt`. It also installs BoxMOT without its dependencies, because BoxMOT asks for OpenCV < 5 and would otherwise replace the project's OpenCV 5 and CUDA torch.
+This installs `requirements.txt` (the benchmark packages are in it). It also installs BoxMOT without its dependencies, because BoxMOT asks for OpenCV < 5 and would otherwise replace the project's OpenCV 5 and CUDA torch.
 
 It then downloads every model, about 1.5 GB in total:
 

@@ -19,7 +19,7 @@ only works over https there). The certificate is made on this PC, so the
 phone shows a warning the first time: choose to go on. The iPhone app
 (mobile/) and the desktop app (desktop/) need no https.
 
-Needs: pip install -r requirements-webapp.txt
+Needs: pip install -r requirements.txt
 """
 
 import sys

@@ -2,7 +2,7 @@
 # desktop app, benchmarks).
 #
 #   pip install -r requirements.txt
-#   pip install --no-deps easyocr boxmot      # two last ones, without their own deps
+#   pip install --no-deps easyocr boxmot==25.0.0     # two last ones, without their own deps
 #
 # easyocr and boxmot come last and without dependencies because they would
 # replace the CUDA torch / OpenCV 5 below; all they need is in this list.

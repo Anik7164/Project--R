@@ -71,7 +71,7 @@ try {
     $list = Join-Path $env:TEMP "requirements-setup.txt"
     Get-Content (Join-Path $App "requirements.txt") | Where-Object { $_ -notmatch '^\s*(torch|torchvision)==|extra-index-url' } | Set-Content $list
     Run $uv pip install --python $python @extra -r $list
-    Run $uv pip install --python $python @extra --no-deps easyocr boxmot
+    Run $uv pip install --python $python @extra --no-deps easyocr boxmot==25.0.0
 
     Step "Check"
     Push-Location $App

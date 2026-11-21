@@ -48,7 +48,7 @@ flowchart TD
 `webapp/` runs the pipeline while the match is played and shows it in a browser: the picture, the Bengali lines, the voice, a scoreboard.
 
 ```powershell
-pip install -r requirements-webapp.txt
+pip install -r requirements.txt
 python webapp/server.py                  # then open http://127.0.0.1:8000
 python webapp/server.py --host 0.0.0.0   # phones and laptops on the same Wi-Fi can watch too
 ```
@@ -90,7 +90,7 @@ A video in the list marked "finished" already has `outputs/tracking/<name>_comme
 `desktop/app.py` is the same page in a window of its own. It starts the server itself and stops it when the window is closed, so there is no terminal to keep open.
 
 ```powershell
-pip install -r requirements-desktop.txt     # pywebview, a few MB; uses the WebView2 that Windows 10/11 already has
+pip install -r requirements.txt            # includes pywebview; uses the WebView2 that Windows 10/11 already has
 python desktop/app.py                       # or double-click  desktop\Project R.bat
 python desktop/app.py --share               # phones and other PCs on the Wi-Fi can join
 python desktop/app.py --connect 192.168.0.5 # only a window onto the PC that runs the match
@@ -134,7 +134,7 @@ $env:PIP_CACHE_DIR = "$PWD\.cache\pip"; $env:TEMP = "$PWD\.cache\tmp"; $env:TMP 
 python src/setup_models.py --install    # extra packages + every model, all inside the project folder
 ```
 
-This installs `requirements-models.txt` (EasyOCR and BoxMOT without their dependencies, so they cannot replace the project's OpenCV 5) and downloads YOLO26, PARSeq, the EasyOCR text detector, LMBN ReID, ResNet-152, NetVLAD++ and the Bengali MMS-TTS voice into `.cache/`.
+This installs `requirements.txt` (EasyOCR and BoxMOT without their dependencies, so they cannot replace the project's OpenCV 5) and downloads YOLO26, PARSeq, the EasyOCR text detector, LMBN ReID, ResNet-152, NetVLAD++ and the Bengali MMS-TTS voice into `.cache/`.
 
 ### Football detector (train once, on your GPU)
 

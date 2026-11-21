@@ -86,7 +86,7 @@ if ($Offline) {
     Get-Content (Join-Path $root "requirements.txt") | Where-Object { $_ -notmatch '^\s*(torch|torchvision)==|extra-index-url' } | Set-Content $list
     & $uv pip install --python $py --break-system-packages -r $list
     if ($LASTEXITCODE -ne 0) { throw "Installing the libraries failed." }
-    & $uv pip install --python $py --break-system-packages --no-deps easyocr boxmot
+    & $uv pip install --python $py --break-system-packages --no-deps easyocr boxmot==25.0.0
     if ($LASTEXITCODE -ne 0) { throw "Installing easyocr and boxmot failed." }
     # The offline Bengali voice (Meta MMS, about 150 MB), so no first-use download.
     $voice = Join-Path $stage "huggingface"

@@ -10,7 +10,7 @@ window is closed, so there is no terminal to keep open and no browser.
 On Windows, double-click "desktop\\Project R.bat" (or the shortcut that
 desktop\\make_shortcut.ps1 makes) instead of typing this.
 
-Needs: pip install -r requirements-desktop.txt   (pywebview, a few MB).
+Needs: pip install -r requirements.txt   (pywebview is in it).
 Without it the page opens in an Edge or Chrome app window instead, and
 failing that in the normal browser.
 
@@ -215,7 +215,7 @@ def check():
     missing = [package for module, package in NEEDED if importlib.util.find_spec(module) is None]
     if importlib.util.find_spec("webview") is None:
         print("pywebview is not installed: the page opens in an Edge or Chrome window instead "
-              "(pip install -r requirements-desktop.txt for the app window).")
+              "(pip install -r requirements.txt for the app window).")
     if not SERVER.is_file():
         print(f"Missing: {SERVER}. Is this the whole project, on the branch with the web app?")
         return 1
@@ -261,7 +261,7 @@ def main(argv=None):
                                  .splitlines()[-12:])
                 tell("The commentary server did not start.\n\n" + tail +
                      f"\n\nFull log: {log_path}\n"
-                     "Is the web app installed?  pip install -r requirements-webapp.txt")
+                     "Is the web app installed?  pip install -r requirements.txt")
                 return 1
         if args.share and operator_key():
             address += f"/?key={operator_key()}"    # this window is the operator's
