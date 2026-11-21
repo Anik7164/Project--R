@@ -41,6 +41,8 @@ FOLDER = project_cache.CACHE / "desktop"
 KEY_FILE = project_cache.CACHE / "webapp-operator-key.txt"
 PORT = 8000
 START_SECONDS = 90.0     # a cold start on a slow disk
+# Windows (WinForms) crashes on a .png window icon: it needs the .ico.
+ICON = "icon.ico" if sys.platform == "win32" else "icon.png"
 
 
 def answers(address, timeout=1.5):
@@ -202,7 +204,7 @@ def show_window(prepare, title=TITLE):
 
             try:
                 webview.start(work, private_mode=False, storage_path=str(storage),
-                              icon=str(ROOT / "desktop" / "icon.png"))
+                              icon=str(ROOT / "desktop" / ICON))
             except TypeError:               # an older pywebview
                 webview.start(work)
             return "window"
