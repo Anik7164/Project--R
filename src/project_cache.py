@@ -54,3 +54,35 @@ for _variable, _folder in _LOCATIONS.items():
     os.environ.setdefault(_variable, str(_path))
 
 tempfile.tempdir = os.environ["TEMP"]
+
+
+def _no_console_windows():
+    """Windows: when this program has no console of its own on screen (the
+    desktop app, the setup's shortcuts), the tools it starts (ffmpeg for the
+    microphone, camera listing) would each open a black console window on
+    top of the app. Start them without one. From a terminal nothing changes."""
+    import subprocess
+    import sys
+
+    if sys.platform != "win32":
+        return
+    try:
+        import ctypes
+
+        window = ctypes.windll.kernel32.GetConsoleWindow()
+        if window and ctypes.windll.user32.IsWindowVisible(window):
+            return
+    except Exception:
+        pass
+    hidden = getattr(subprocess, "CREATE_NO_WINDOW", 0x08000000)
+    original = subprocess.Popen.__init__
+
+    def __init__(self, *args, **kwargs):
+        if not kwargs.get("creationflags"):
+            kwargs["creationflags"] = hidden
+        original(self, *args, **kwargs)
+
+    subprocess.Popen.__init__ = __init__
+
+
+_no_console_windows()
