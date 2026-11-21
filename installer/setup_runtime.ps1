@@ -27,6 +27,8 @@ $log = Join-Path $App "setup.log"
 $env:UV_CACHE_DIR = Join-Path $App ".cache\uv"
 $env:UV_PYTHON_INSTALL_DIR = Join-Path $App "python"
 $env:UV_PYTHON_PREFERENCE = "only-managed"
+$env:UV_PYTHON_BIN_DIR = Join-Path $App ".cache\uv-bin"
+Remove-Item Env:VIRTUAL_ENV -ErrorAction SilentlyContinue
 $env:TEMP = $env:TMP = Join-Path $App ".cache\tmp"
 New-Item -ItemType Directory -Force -Path $env:TEMP | Out-Null
 

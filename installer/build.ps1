@@ -58,17 +58,22 @@ if (-not $iscc) {
 $defines = @("/DMyVersion=$Version")
 if ($Offline) {
     $stage = Join-Path $root ".cache\stage"
-    $runtime = Join-Path $stage "runtime-$Torch"
+    $runtime = Join-Path $stage "python-$Torch"
     $env:UV_CACHE_DIR = Join-Path $root ".cache\uv"
     $env:UV_PYTHON_INSTALL_DIR = Join-Path $stage "pythons"
     $env:UV_PYTHON_PREFERENCE = "only-managed"
-    if (-not (Test-Path (Join-Path $runtime "python.exe"))) {
+    $env:UV_PYTHON_BIN_DIR = Join-Path $stage "bin"   # not C:\Users\...\.local\bin
+    Remove-Item Env:VIRTUAL_ENV -ErrorAction SilentlyContinue  # an active .venv is not the Python to pack
+    if (-not (Test-Path (Join-Path $runtime "Lib\site.py"))) {
         Write-Host "Python 3.11 for the setup file..."
         & $uv python install 3.11
         if ($LASTEXITCODE -ne 0) { throw "uv python install failed." }
-        $found = & $uv python find 3.11
-        if ($LASTEXITCODE -ne 0 -or -not $found) { throw "Python 3.11 not found after installing it." }
-        Copy-Item (Split-Path -Parent $found) $runtime -Recurse
+        # The full Python that uv installed (not a venv's python.exe).
+        $home3 = Get-ChildItem (Join-Path $stage "pythons") -Directory -Filter "cpython-3.11*" |
+            Where-Object { Test-Path (Join-Path $_.FullName "Lib\site.py") } | Select-Object -First 1
+        if (-not $home3) { throw "Python 3.11 not found in $stage\pythons after installing it." }
+        if (Test-Path $runtime) { throw "$runtime is there but incomplete: delete that folder, then run me again." }
+        Copy-Item $home3.FullName $runtime -Recurse
     }
     $py = Join-Path $runtime "python.exe"
     $index = if ($Torch -eq "cuda") { "https://download.pytorch.org/whl/cu132" } else { "https://download.pytorch.org/whl/cpu" }
