@@ -26,9 +26,19 @@
   </div>
   <div class="top-right">
     <button class="ghost server" id="serverName" hidden></button>
+    <button class="ghost" id="phoneButton" hidden>Connect a phone</button>
     <div class="status" id="status"><span class="dot"></span><span id="statusText">Not connected</span></div>
   </div>
 </header>
+
+<dialog class="phone-dialog" id="phoneDialog">
+  <h3>Connect a phone</h3>
+  <div class="qr" id="shareQrCode"></div>
+  <p id="phoneText">In the iPhone app, tap <b>Scan the QR code on the PC</b> and point the phone at this code.
+    The phone joins as operator and can run the match too. The phone has to be on the same Wi-Fi.</p>
+  <p class="hint">The iPhone's own camera app opens the same page in Safari instead.</p>
+  <button type="button" id="phoneClose">Close</button>
+</dialog>
 
 <main class="layout">
   <section class="stage-col">

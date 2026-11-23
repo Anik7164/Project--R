@@ -1003,6 +1003,14 @@ async function boot() {
       $("share").hidden = false;
       $("share").textContent = `Phones and other PCs on this Wi-Fi: viewers open ${state.share.url} · ` +
         `the iPhone app and the operator use address ${state.share.address} with key ${state.share.key}`;
+      showShareQr(`${state.share.url}/?key=${encodeURIComponent(state.share.key)}`);
+    } else if (operator && !SHELL && !BROADCAST) {
+      // Not shared on the Wi-Fi: the button says how to share instead of a code.
+      $("shareQrCode").hidden = true;
+      $("phoneText").textContent = "Phones cannot reach Project R right now. Close it and start " +
+        "\u201cProject R (phones on the Wi-Fi can join)\u201d from the Start menu " +
+        "(or desktop\\Project R.bat --share). This button then shows the QR code to scan.";
+      phoneButton();
     }
     if (!operator) $("idleText").textContent = "The commentary starts when the operator starts the match.";
     $("soundOn").hidden = false;
@@ -1017,3 +1025,25 @@ async function boot() {
 }
 
 boot();
+
+// The QR code a phone scans to join as operator: the operator address with its key.
+var shownQr = "";          // var: boot() above may already ask for it
+async function showShareQr(text) {
+  if (text === shownQr) return;
+  try {
+    await loadScript("/static/vendor/qrcode.js");
+    const code = window.qrcode(0, "M");
+    code.addData(text);
+    code.make();
+    $("shareQrCode").innerHTML = code.createSvgTag({ cellSize: 5, margin: 3, scalable: true });
+    $("shareQrCode").hidden = false;
+    shownQr = text;
+    if (!SHELL) phoneButton();        // not on the phone itself
+  } catch { /* the address and key are still written in Settings */ }
+}
+
+function phoneButton() {
+  $("phoneButton").hidden = false;
+  $("phoneButton").onclick = () => $("phoneDialog").showModal();
+  $("phoneClose").onclick = () => $("phoneDialog").close();
+}
