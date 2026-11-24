@@ -127,11 +127,16 @@ class Hub:
         self.camera_tokens = {}      # token -> app id: handed to an app asked to start its camera
         self.app_feeds = {}          # app id -> its PushFeed, kept when it stops so a match
                                      # using it goes on when the phone films again
+        self.taken = set()           # app ids the PC made film (asked, or used in a match)
+        self.selected = set()        # app ids the operator has chosen as a camera just now
         self.share = None  # {"address", "key"}: what a phone on the Wi-Fi types to join
         self.warm = False  # load the models when the server starts (main() sets it)
 
     def _deliver(self, item):
         from live_engine import CAMERA_OF_KIND
+
+        if isinstance(item, dict) and item.get("state") in ("ended", "failed") and self.taken:
+            release_phones(keep_selected=False)
 
         camera = CAMERA_OF_KIND.get(item[0]) if isinstance(item, bytes) else None
         on_air = getattr(self.match, "on_air", 1)
@@ -300,8 +305,33 @@ def wake_phone(phone):
         return False
     token = secrets.token_urlsafe(9)
     hub.camera_tokens[token] = phone[4:]
+    hub.taken.add(phone[4:])
     app["client"].put_nowait({"type": "camera_request", "token": token})
     return True
+
+
+def apps_in(specs):
+    """The app ids of the iPhones among these camera choices."""
+    return {str(spec.get("id", ""))[4:] for spec in specs
+            if spec and spec.get("kind") == "phone" and str(spec.get("id", "")).startswith("app-")}
+
+
+def match_apps():
+    match = hub.match
+    if match is None or match.state not in ("starting", "running") or match.stopping.is_set():
+        return set()
+    return apps_in([match.spec, *getattr(match, "other_specs", [])])
+
+
+def release_phones(keep_selected=True):
+    """iPhones the PC made film and needs no more (not in the running match,
+    not chosen just now) are told to stop: their camera screen closes."""
+    keep = match_apps() | (hub.selected if keep_selected else set())
+    for app_id in sorted(hub.taken - keep):
+        hub.taken.discard(app_id)
+        app = hub.apps.get(app_id)
+        if app is not None:
+            app["client"].put_nowait({"type": "camera_release"})
 
 
 def sending(phone):
@@ -427,8 +457,22 @@ async def start(request: Request):
     from live_engine import MAX_CAMERAS, LiveMatch
 
     body = await request.json()
+    if hub.match is not None and hub.match.state in ("starting", "running"):
+        raise HTTPException(409, "A match is already running. Stop it first.")
     await phones_awake([body.get("source"), *(body.get("others") or []), body.get("second")])
-    spec = source_spec(body.get("source"))
+    spec, others = camera_specs(body)
+    hub.taken |= apps_in([spec, *others])
+    hub.match = LiveMatch(spec, body.get("settings"), hub.publish, hub.publish, others=others)
+    hub.match.start()
+    hub.publish(hub.match.hello())
+    return {"session": hub.match.id}
+
+
+def camera_specs(body, live_only=False, main=None):
+    """Camera 1 and cameras 2 and 3, checked: no device twice."""
+    from live_engine import MAX_CAMERAS
+
+    spec = main or source_spec(body.get("source"), live_only)
     # Cameras 2 and 3 are shown beside camera 1 and can be put on air; which
     # device is which is the operator's choice on the page.
     wanted = list(body.get("others") or [])
@@ -444,12 +488,43 @@ async def start(request: Request):
                 raise HTTPException(400, f"Camera {earlier} and camera {number} are the same "
                                          "device. Choose different ones.")
         others.append(other)
-    if hub.match is not None and hub.match.state in ("starting", "running"):
-        raise HTTPException(409, "A match is already running. Stop it first.")
-    hub.match = LiveMatch(spec, body.get("settings"), hub.publish, hub.publish, others=others)
-    hub.match.start()
-    hub.publish(hub.match.hello())
-    return {"session": hub.match.id}
+    return spec, others
+
+
+@app.post("/api/match/cameras")
+async def match_cameras(request: Request):
+    """The operator changed the cameras (or how many) while the match runs:
+    the change is made at once, the match goes on."""
+    need_operator(request)
+    match = hub.match
+    if match is None or match.state not in ("starting", "running"):
+        raise HTTPException(409, "No match is running.")
+    body = await request.json()
+    await phones_awake([body.get("source"), *(body.get("others") or [])])
+    if match.spec.get("kind") in ("camera", "url", "phone"):
+        spec, others = camera_specs(body, live_only=True)
+    else:                                   # a video: only cameras 2 and 3 change
+        spec, others = None, camera_specs(body, main=match.spec)[1]
+    hub.taken |= apps_in([spec or {}, *others])
+    try:
+        await asyncio.to_thread(match.set_cameras, spec, others)
+    except ValueError as error:
+        raise HTTPException(400, str(error))
+    release_phones()
+    return {"ok": True}
+
+
+@app.post("/api/camera/selection")
+async def camera_selection(request: Request):
+    """Which devices the operator has chosen for camera 1, 2 and 3 now: an
+    iPhone the PC made film that is no longer chosen (nor in the match)
+    stops, and its camera screen closes."""
+    need_operator(request)
+    body = await request.json()
+    ids = [str(value) for value in (body.get("ids") or [])][:3]
+    hub.selected = {value[len("phone:app-"):] for value in ids if value.startswith("phone:app-")}
+    release_phones()
+    return {"ok": True}
 
 
 @app.get("/api/cameras")
@@ -538,6 +613,7 @@ def stop(request: Request):
     need_operator(request)
     if hub.match is not None:
         hub.match.stop()
+    release_phones(keep_selected=False)
     return {"ok": True}
 
 

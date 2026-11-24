@@ -404,6 +404,14 @@ function onStats(next) {
   // Why nothing is said just now: no picture, a black one, nobody in view.
   $("hold").hidden = !next.hold;
   $("hold").textContent = next.hold || "";
+  // Cameras set up, match not kicked off: Kick-off is the next thing to press.
+  const waiting = Boolean(next.waiting_kickoff) && running;
+  const kickoff = document.querySelector('.ov-clock [data-action="kickoff"]');
+  if (kickoff) kickoff.classList.toggle("primary", waiting);
+  if (waiting && operator && !BROADCAST && !(before && before.waiting_kickoff && before.session === next.session)) {
+    const clock = document.querySelector(".ov-clock");
+    if (clock) setOverlay(clock, true);
+  }
   // Viewers and the broadcast get one picture: the camera on air.
   setCameras(operator && !BROADCAST && running ? next.cameras : null, next.on_air);
   $("onAirText").textContent = next.cameras && next.cameras.length > 1
@@ -576,6 +584,9 @@ function connect() {
     } else if (message.type === "camera_request") {
       // The operator chose this iPhone as a camera: the app starts filming.
       toApp({ action: "camera", token: message.token });
+    } else if (message.type === "camera_release") {
+      // ... and no longer uses it: the app stops filming, its camera screen closes.
+      toApp({ action: "camera_stop" });
     } else if (message.type === "stats") onStats(message);
     else if (message.type === "line") onLine(message.line, false);
     else if (message.type === "audio") onVoice(message.id, message.url);
@@ -648,6 +659,8 @@ let sourceKind = "camera";
 
 function chooseTab(kind) {
   sourceKind = kind;
+  // A live match: the cameras are opened first, Kick-off starts the commentary.
+  $("start").textContent = kind === "file" ? "Start" : "Open cameras";
   document.querySelectorAll(".tabs button").forEach((button) => {
     button.setAttribute("aria-selected", String(button.dataset.kind === kind));
   });
@@ -764,8 +777,44 @@ function onDeviceChosen(slot) {
   mine.device.dataset.was = mine.device.value;
   mine.address.hidden = mine.device.value !== ADDRESS;
   clearPreview(slot);
+  if (!matchRunning()) wakePhone(mine.device);   // a running match asks it itself
+  camerasChanged();
+}
+
+const matchRunning = () => Boolean(stats && ["running", "starting"].includes(stats.state));
+
+// After any change of the cameras: remembered; the PC told which iPhones
+// are still wanted (one no longer chosen stops filming); and in a running
+// match the change is made at once (the split view follows).
+let changing = Promise.resolve();
+function camerasChanged() {
   saveCameras();
-  wakePhone(mine.device);
+  const ids = usedSlots().map((slot) => slotParts(slot).device.value);
+  if (!matchRunning() || sourceKind !== "camera") {
+    api("/api/camera/selection", { ids }).catch(() => {});
+    return;
+  }
+  const typing = usedSlots().some((slot) => {
+    const { device, address } = slotParts(slot);
+    return device.value === ADDRESS && !address.value.trim();
+  });
+  if (typing) return;                 // an IP camera without its address yet
+  const body = { source: cameraSource(slots[0]), others: usedSlots().slice(1).map(cameraSource) };
+  changing = changing.then(async () => {
+    showError();
+    try {
+      if (body.others.length !== (stats.cameras || []).length - 1 ||
+          usedSlots().some((slot) => slotParts(slot).device.selectedOptions[0]?.dataset.wake)) {
+        toast("Changing the cameras…");
+      }
+      await api("/api/match/cameras", body);
+      toast(`${body.others.length + 1} camera${body.others.length ? "s" : ""} in the match now`);
+    } catch (error) {
+      toast(error.message || String(error));
+      showError(error);
+    }
+    api("/api/camera/selection", { ids }).catch(() => {});
+  });
 }
 
 // An iPhone with the Project R app was chosen: it is asked to start its
@@ -790,7 +839,7 @@ function swapCameras() {
     address.hidden = device.value !== ADDRESS;
     clearPreview(slot);
   });
-  saveCameras();
+  camerasChanged();
 }
 
 function setCameraCount(count) {
@@ -861,6 +910,8 @@ async function start() {
     mic: $("mic").value,
     start: sourceKind === "file" ? seconds($("startAt").value) : 0,
     need_players: Number($("needPlayers").value),
+    // Cameras and stream: set up first, nothing is said until Kick-off.
+    wait_kickoff: sourceKind !== "file",
   };
   soundOn();
   try {
@@ -907,10 +958,10 @@ function wire() {
   slots.forEach((slot) => {
     const { device, address } = slotParts(slot);
     device.onchange = () => onDeviceChosen(slot);
-    address.onchange = saveCameras;
+    address.onchange = camerasChanged;
     slot.querySelector(".look").onclick = () => lookAtCamera(slot);
   });
-  $("cameraCount").onchange = (event) => { setCameraCount(Number(event.target.value)); saveCameras(); };
+  $("cameraCount").onchange = (event) => { setCameraCount(Number(event.target.value)); camerasChanged(); };
   $("swapCameras").onclick = swapCameras;
   $("refreshCameras").onclick = loadCameras;
   $("copyBroadcast").onclick = () => {

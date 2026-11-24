@@ -100,6 +100,8 @@ HOLD = {
     "frozen": "The picture is not moving: commentary is on hold.",
     "empty": "No match in view (no players spread over the picture, only people close "
              "to the camera or nobody): commentary is on hold.",
+    "kickoff": "The cameras are on. Press Kick-off (Match clock) when the match starts: "
+               "the clock and the commentary start with it.",
 }
 
 # Seconds after an event before it can be said: what its rule still needs
@@ -165,6 +167,9 @@ class FrameSource(threading.Thread):
         self.last_wall = None        # time.monotonic() of the newest picture
         self.read_times = deque(maxlen=90)   # when the last pictures came from a live source
         self.mode = ""               # what the camera really gives, e.g. "1280x720 MJPG"
+        # time.monotonic() of second 0: given, a camera that takes over from
+        # another goes on with the same clock.
+        self.zero = spec.get("zero")
 
     @property
     def rate(self):
@@ -246,7 +251,11 @@ class FrameSource(threading.Thread):
         try:
             capture = self._open()
             step = 1.0 / self.process_fps
-            start, next_at = time.monotonic(), 0.0
+            taking_over = self.zero is not None and self.live
+            if not taking_over:
+                self.zero = time.monotonic()
+            start = self.zero
+            next_at = max(0.0, time.monotonic() - start) if taking_over else 0.0
             next_show = 0.0
             if self.live:
                 limit = LOST_SECONDS[self.spec["kind"]]
@@ -803,7 +812,22 @@ DEFAULTS = {
     "mic": "",               # ffmpeg sound input for a camera, e.g. audio=Microphone (USB)
     "start": 0.0,            # a file: start this many seconds in
     "need_players": 3,       # fewer small people than this in most frames: nothing is said (0: off)
+    "wait_kickoff": False,   # set the cameras up first: nothing is said until the operator's Kick-off
 }
+
+
+def same_camera(one, other):
+    """Are two camera choices the same device?"""
+    if (one or {}).get("kind") != (other or {}).get("kind"):
+        return False
+    kind = one["kind"]
+    if kind == "camera":
+        return int(one.get("index", 0)) == int(other.get("index", 0))
+    if kind == "url":
+        return one.get("url") == other.get("url")
+    if kind == "phone":
+        return one.get("feed") is other.get("feed")
+    return one.get("path") == other.get("path")
 
 
 class LiveMatch:
@@ -837,6 +861,8 @@ class LiveMatch:
         self.blind = []               # [start, end or None]: nothing said about these
         self.others = {}              # camera number -> FrameSource
         self.other_errors = {}        # camera number -> why it stopped
+        self.other_stops = {}         # camera number -> Event: that camera was taken out
+        self.camera_lock = threading.Lock()   # one change of cameras at a time
         # The picture shown (DISPLAY_FPS) apart from the one analysed.
         self.display_cond = threading.Condition()
         self.display_item = None
@@ -923,8 +949,7 @@ class LiveMatch:
             if self.display_live:
                 threading.Thread(target=self._display_loop, daemon=True).start()
             for number, other in enumerate(self.other_specs, start=2):
-                threading.Thread(target=self._other_loop, args=(number, other),
-                                 daemon=True).start()
+                self._start_other(number, other)
             self._start_sound()
             if not models_ready():
                 self._status(f"{name} is on. Loading the models: commentary starts in a moment "
@@ -942,9 +967,10 @@ class LiveMatch:
             last_stats, done_at = time.monotonic(), deque(maxlen=40)
             speed_check_at = time.monotonic() + 8.0
             while not self.stopping.is_set():
-                item = self.source.get()
+                source = self.source          # the operator may switch camera 1
+                item = source.get()
                 if item is None:
-                    if self.source.ended:
+                    if source.ended and source is self.source:
                         break
                     if self.state == "starting" and self.source.live and \
                             time.monotonic() - waiting_since > FIRST_PICTURE_SECONDS:
@@ -1207,17 +1233,37 @@ class LiveMatch:
 
     # -- cameras 2 and 3 -----------------------------------------------
 
-    def _other_loop(self, number, spec):
+    def _start_other(self, number, spec):
+        source = FrameSource(spec, OTHER_FPS, True)
+        stop = threading.Event()
+        self.others[number] = source
+        self.other_stops[number] = stop
+        self.other_errors.pop(number, None)
+        threading.Thread(target=self._other_loop, args=(number, spec, source, stop),
+                         daemon=True).start()
+
+    def _stop_other(self, number):
+        stop = self.other_stops.pop(number, None)
+        if stop is not None:
+            stop.set()
+        source = self.others.pop(number, None)
+        if source is not None:
+            source.stopping.set()
+        self.other_errors.pop(number, None)
+
+    def _other_loop(self, number, spec, source=None, stop=None):
         """Cameras 2 and 3 are passed on to the browsers beside camera 1,
         and one of them may be on air. They are not analysed: the lines
         come from camera 1."""
-        source = FrameSource(spec, OTHER_FPS, True)
-        self.others[number] = source
+        if source is None:
+            source = FrameSource(spec, OTHER_FPS, True)
+            self.others[number] = source
+        stop = stop or threading.Event()
         name = source.describe()
         source.start()
         kind = bytes([PICTURE_KIND[number]])
         quiet = False
-        while not self.stopping.is_set():
+        while not self.stopping.is_set() and not stop.is_set():
             item = source.get()
             if item is None:
                 if source.ended:
@@ -1248,7 +1294,8 @@ class LiveMatch:
                 # On camera 1's clock, so the browsers show all of them equally late.
                 now = self.shown_at if self.display_live else self.clock
                 self.publish_bytes(kind + struct.pack("<d", now) + jpeg.tobytes())
-        if not self.stopping.is_set():
+        source.stopping.set()
+        if not self.stopping.is_set() and not stop.is_set():
             self.other_errors[number] = source.error or "it stopped sending pictures"
             back = ""
             if self.on_air == number:
@@ -1275,6 +1322,55 @@ class LiveMatch:
                           f"a second{mode}, so its picture looks slow. Webcams slow down in poor "
                           "light; also try another USB port (not the same hub as another "
                           "camera) or close other programs using the camera.")
+
+    # -- the operator changes the cameras while the match runs ----------
+
+    def set_cameras(self, main, others, wait=8.0):
+        """Camera 1 (main) and cameras 2 and 3 (others), changed during the
+        match: only what changed is opened or closed, and the match clock
+        goes on. A new camera 1 must send a picture first, or camera 1
+        stays as it was."""
+        others = list(others or [])
+        if len(others) > MAX_CAMERAS - 1:
+            raise ValueError(f"At most {MAX_CAMERAS} cameras.")
+        with self.camera_lock:
+            if self.stopping.is_set():
+                raise ValueError("The match has ended.")
+            if main is not None and not same_camera(main, self.spec):
+                self._switch_camera_1(main, wait)
+            old = list(self.other_specs)
+            for number in range(2, 2 + max(len(old), len(others))):
+                before = old[number - 2] if number - 2 < len(old) else None
+                after = others[number - 2] if number - 2 < len(others) else None
+                if before is not None and after is not None and same_camera(before, after):
+                    continue
+                if before is not None:
+                    self._stop_other(number)
+                if after is not None:
+                    self._start_other(number, after)
+                if self.on_air == number:
+                    self.on_air = 1
+            self.other_specs = others
+            self.second_spec = others[0] if others else None
+        self.publish_json(self.stats())
+
+    def _switch_camera_1(self, spec, wait):
+        old = self.source
+        if old is None or not old.live or spec.get("kind") not in ("camera", "url", "phone"):
+            raise ValueError("Camera 1 can only be changed to another camera during a live match.")
+        new = FrameSource({**spec, "zero": old.zero}, self.fps, True)
+        new.start()
+        deadline = time.monotonic() + wait
+        while new.last_wall is None and not new.ended and time.monotonic() < deadline:
+            time.sleep(0.1)
+        if new.last_wall is None:
+            new.stopping.set()
+            raise ValueError(f"{new.describe()} sent no picture: camera 1 stays "
+                             f"{old.describe()}.")
+        new.on_picture = self._show       # from now on its pictures are the ones shown
+        self.spec, self.source = spec, new
+        old.stopping.set()
+        self.note(f"Camera 1 is now {new.describe()}.")
 
     def put_on_air(self, number):
         """The operator's choice of what viewers and the stream see."""
@@ -1438,8 +1534,14 @@ class LiveMatch:
         start = self.kickoff if self.kickoff is not None else float(self.settings["start"])
         return int(max(0.0, seconds - start) // 60) + 1
 
+    def waiting(self):
+        """Cameras set up, match not kicked off: nothing is said yet."""
+        return bool(self.settings["wait_kickoff"]) and self.kickoff is None
+
     def phase(self):
         now = self.clock
+        if self.waiting():
+            return "before"
         if self.picture != "ok":
             return "hold"
         if self.full_time is not None and now >= self.full_time:
@@ -1545,6 +1647,8 @@ class LiveMatch:
         now = self.clock
         if self._watch_picture(now) != "ok" or self.frames_done == 0 or self.cut:
             return                      # no match in the picture: nothing is said
+        if self.waiting():
+            return                      # cameras set up, not kicked off yet
         self._refit_teams(now)
         match, window_start = self._snapshot(now)
         cues = []
@@ -1632,6 +1736,8 @@ class LiveMatch:
                 continue
             if window_start > 0 and at < window_start + WINDOW_EDGE and kind != "shootout_start":
                 continue
+            if self.settings["wait_kickoff"] and self.kickoff is not None and at < self.kickoff:
+                continue                # before the kick-off: the cameras were being set up
             same = SAME_EVENT.get(kind, DEFAULT_SAME_EVENT)
             if any(e["type"] == kind and abs(e["time"] - at) <= same for e in self.events):
                 continue
@@ -1840,8 +1946,10 @@ class LiveMatch:
             "realtime": bool(self.settings["realtime"]),
             # Why nothing is said just now ("" while a match is in the picture).
             "picture": self.picture,
-            "hold": (HOLD.get(self.picture, "") if self.state == "running"
+            "hold": (HOLD["kickoff"] if self.state == "running" and self.waiting()
+                     else HOLD.get(self.picture, "") if self.state == "running"
                      else self.message if self.state == "starting" and self.source else ""),
+            "waiting_kickoff": self.waiting(),
             "models_ready": models_ready(),
             # Stopped by hand or broken: the browsers drop what they still held back.
             "cut": self.cut or self.state == "failed",

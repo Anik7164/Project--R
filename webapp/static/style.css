@@ -398,6 +398,11 @@ body { padding: env(safe-area-inset-top) env(safe-area-inset-right) env(safe-are
 .ov-clock .ov-panel { max-width: 100%; }
 .ov-clock .ov-buttons { display: flex; flex-wrap: wrap; justify-content: center; }
 .ov-clock .ov-buttons button { text-align: center; }
+/* Cameras set up, not kicked off: Kick-off is the next thing to press. */
+.ov-buttons button.primary {
+  background: var(--pitch); border-color: var(--pitch); color: #04210f; font-weight: 700;
+  box-shadow: 0 0 0 3px rgba(53, 194, 106, .35);
+}
 .ov-clock[data-open=false] .ov-panel { transform: translateY(14px) scale(.97); transform-origin: bottom center; }
 .ov-clock[data-open=true] .chev { transform: rotate(45deg) translate(-1px, -1px); }
 .ov-clock[data-open=false] .chev { transform: rotate(-135deg) translate(-2px, -2px); }

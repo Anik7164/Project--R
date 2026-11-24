@@ -8,13 +8,15 @@ import WebKit
 /// camera" opens the native camera, which can film over plain http where
 /// Safari cannot. It also knows which phone this is (window.PROJECT_R_DEVICE):
 /// the PC lists the phone as a camera, and when the operator chooses it the
-/// page passes the PC's request on ({action: "camera", token}).
+/// page passes the PC's request on ({action: "camera", token}), and its
+/// "no longer needed" ({action: "camera_stop"}).
 struct WebPage: UIViewRepresentable {
     let url: URL
     let device: (id: String, name: String)
     let onChangePC: () -> Void
     let onCamera: () -> Void
     let onCameraRequest: (String) -> Void
+    let onCameraStop: () -> Void
     let onFailed: (String) -> Void
 
     func makeCoordinator() -> Coordinator {
@@ -74,9 +76,14 @@ struct WebPage: UIViewRepresentable {
                 if text == "change" { parent.onChangePC() }
                 return
             }
-            if let body = message.body as? [String: Any], body["action"] as? String == "camera",
-               let token = body["token"] as? String, !token.isEmpty {
-                parent.onCameraRequest(token)
+            guard let body = message.body as? [String: Any] else { return }
+            switch body["action"] as? String {
+            case "camera":
+                if let token = body["token"] as? String, !token.isEmpty { parent.onCameraRequest(token) }
+            case "camera_stop":
+                parent.onCameraStop()          // the PC no longer uses this phone's camera
+            default:
+                break
             }
         }
 

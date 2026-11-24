@@ -274,6 +274,7 @@ struct MatchView: View {
                 onChangePC: { model.chooseRole() },
                 onCamera: { model.showCamera = true },
                 onCameraRequest: { model.cameraRequested(token: $0) },
+                onCameraStop: { model.cameraReleased() },
                 onFailed: { model.failed($0) })
             .ignoresSafeArea(edges: [.bottom, .horizontal])
             .background(Color.night.ignoresSafeArea())

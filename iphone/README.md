@@ -27,6 +27,8 @@ What it does:
   starts it by hand. It sends JPEG pictures to the PC's `/ws/camera`, up to 15 a second,
   never more than 2 on their way (slow Wi-Fi drops pictures instead of building lag).
   Unlike Safari, this works over plain http. Only an IP camera needs an rtsp:// address.
+- **Stops when the PC lets it go.** When the operator chooses another device, goes to fewer
+  cameras, or stops the match, the PC tells the app and its camera screen closes.
 
 ## On the PC
 

@@ -254,6 +254,77 @@ def test_shootout_kick_is_said_after_the_wait_ends_not_during_it():
     assert match.phase() == "shootout"
 
 
+def test_cameras_are_set_up_first_and_kickoff_starts_the_commentary():
+    MAX_SILENCE = live_engine.filler.MAX_SILENCE
+
+    match, said = _match(wait_kickoff=True)
+    match.state = "running"
+    _running(match, 0, 10)
+    _standing(match, 10, 40)                # something happens while the cameras are set up
+    _running(match, 40, 52)
+    for clock in (40.0, 50.0, 52.0):
+        match.clock = clock
+        match._tick()
+    assert not _lines(said)
+    stats = match.stats()
+    assert stats["waiting_kickoff"] and stats["hold"] == live_engine.HOLD["kickoff"]
+    assert match.phase() == "before"
+    match.operator("kickoff")               # at 0:52
+    match.clock = 56.0
+    match._tick()
+    assert [l["type"] for l in _lines(said)] == ["kickoff"]   # nothing from before it
+    assert not match.stats()["waiting_kickoff"] and match.minute(56.0) == 1
+    match.clock = 52.0 + MAX_SILENCE + 1
+    match._tick()
+    assert _lines(said)[-1]["type"] == "filler"
+
+
+def test_cameras_change_while_the_match_runs():
+    import threading
+    import time
+
+    import cv2
+
+    ok, jpeg = cv2.imencode(".jpg", np.full((90, 160, 3), 120, dtype=np.uint8))
+    feeds = {name: live_engine.PushFeed(name) for name in "ABC"}
+    spec = {name: {"kind": "phone", "feed": feed, "id": name, "label": f"phone {name}"}
+            for name, feed in feeds.items()}
+    match = live_engine.LiveMatch(spec["A"], {}, lambda item: None, lambda item: None,
+                                  others=[spec["B"]])
+
+    def phones():
+        while not match.stopping.is_set():
+            for feed in feeds.values():
+                feed.push(jpeg.tobytes())
+            time.sleep(0.05)
+
+    threading.Thread(target=phones, daemon=True).start()
+    match.source = live_engine.FrameSource(spec["A"], 12.0, True)
+    match.source.start()
+    match._start_other(2, spec["B"])
+    try:
+        numbers = lambda: [c["number"] for c in match.stats()["cameras"]]   # noqa: E731
+        match.put_on_air(2)
+        match.set_cameras(spec["A"], [])                # 2 cameras -> 1: the split view goes
+        assert numbers() == [1] and match.others == {} and match.on_air == 1
+        match.set_cameras(spec["A"], [spec["B"], spec["C"]])   # -> 3
+        assert numbers() == [1, 2, 3] and set(match.others) == {2, 3}
+        two = match.others[2]
+        match.set_cameras(spec["A"], [spec["B"]])       # camera 2 unchanged: not opened again
+        assert match.others[2] is two and numbers() == [1, 2]
+        zero = match.source.zero
+        match.set_cameras(spec["C"], [spec["B"]])       # another camera 1, the same clock
+        assert match.spec is spec["C"] and match.source.spec["feed"] is feeds["C"]
+        assert match.source.zero == zero
+        dead = {"kind": "phone", "feed": live_engine.PushFeed("D"), "id": "D", "label": "phone D"}
+        with pytest.raises(ValueError):
+            match.set_cameras(dead, [spec["B"]], wait=0.5)   # sends nothing: camera 1 stays
+        assert match.spec is spec["C"]
+    finally:
+        match.stopping.set()
+        match.source.stopping.set()
+
+
 # ----------------------------------------------------------------------
 # Nothing is said unless a match is in the picture
 # ----------------------------------------------------------------------
@@ -599,6 +670,87 @@ def test_viewers_need_no_password_and_a_chosen_iphone_starts_filming(tmp_path, m
         assert not client.get("/api/state", headers={"X-Key": "goal2026"}).json()["operator"]
         server.wrong_passwords.clear()
         assert client.get("/api/state", headers={"X-Key": "goal2026"}).json()["operator"]
+
+
+def test_an_iphone_the_pc_no_longer_uses_is_told_to_stop(monkeypatch):
+    import threading
+
+    import cv2
+    from fastapi.testclient import TestClient
+
+    import server
+
+    monkeypatch.setattr(server, "camera_names", lambda: {0: "Laptop camera"})
+
+    class FakeMatch:
+        state, id = "running", "x"
+
+        def __init__(self, spec, settings, publish_json, publish_bytes, second=None, others=None):
+            self.spec, self.other_specs = spec, list(others or [])
+            self.stopping = threading.Event()
+
+        def start(self):
+            pass
+
+        def stop(self):
+            self.stopping.set()
+            self.state = "ended"
+
+        def set_cameras(self, main, others):
+            self.spec, self.other_specs = main or self.spec, list(others)
+
+        def hello(self):
+            return {"type": "hello", "stats": {}, "lines": [], "notes": []}
+
+    def until(socket_, kind):
+        while True:
+            message = socket_.receive_json()
+            if message.get("type") == kind:
+                return message
+
+    monkeypatch.setattr(live_engine, "LiveMatch", FakeMatch)
+    ok, jpeg = cv2.imencode(".jpg", np.full((90, 160, 3), 120, dtype=np.uint8))
+    with TestClient(server.app) as client:
+        for name, value in (("match", None), ("key", None), ("apps", {}), ("camera_tokens", {}),
+                            ("app_feeds", {}), ("taken", set()), ("selected", set())):
+            monkeypatch.setattr(server.hub, name, value)
+        with client.websocket_connect("/ws?app=abc&name=Goal%20side") as iphone:
+            client.post("/api/camera/wake", json={"id": "app-abc"})
+            token = until(iphone, "camera_request")["token"]
+            with client.websocket_connect(f"/ws/camera?app=abc&token={token}&name=Goal%20side") as camera:
+                camera.receive_json()
+                camera.send_bytes(jpeg.tobytes())
+                # Still chosen: it keeps filming. Another device chosen: it is told to stop.
+                client.post("/api/camera/selection", json={"ids": ["camera:0", "phone:app-abc"]})
+                assert server.hub.taken == {"abc"}
+                client.post("/api/camera/selection", json={"ids": ["camera:0"]})
+                assert until(iphone, "camera_release") == {"type": "camera_release"}
+                assert server.hub.taken == set()
+
+                # In a match as camera 2 it is kept, even when not chosen on a page...
+                client.post("/api/camera/selection", json={"ids": ["camera:0", "phone:app-abc"]})
+                assert client.post("/api/start", json={
+                    "source": {"kind": "camera", "index": 0},
+                    "others": [{"kind": "phone", "id": "app-abc"}]}).status_code == 200
+                client.post("/api/camera/selection", json={"ids": ["camera:0"]})
+                assert server.hub.taken == {"abc"}
+                # ... until the match goes back to one camera.
+                assert client.post("/api/match/cameras", json={
+                    "source": {"kind": "camera", "index": 0}, "others": []}).json() == {"ok": True}
+                assert server.hub.match.other_specs == []
+                until(iphone, "camera_release")
+
+                # Stop lets every phone of the match go.
+                client.post("/api/match/cameras", json={
+                    "source": {"kind": "camera", "index": 0},
+                    "others": [{"kind": "phone", "id": "app-abc"}]})
+                assert server.hub.taken == {"abc"}
+                client.post("/api/stop")
+                until(iphone, "camera_release")
+                assert server.hub.taken == set()
+        # No match: cameras cannot be changed in one.
+        assert client.post("/api/match/cameras", json={
+            "source": {"kind": "camera", "index": 0}}).status_code == 409
 
 
 def test_three_cameras_side_by_side_and_viewers_see_the_one_on_air(tmp_path, monkeypatch):

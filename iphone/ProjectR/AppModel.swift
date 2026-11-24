@@ -183,6 +183,13 @@ final class AppModel: ObservableObject {
                      token: token, app: Store.deviceID)
     }
 
+    /// The PC no longer uses this phone as a camera (another device was
+    /// chosen, fewer cameras, or the match stopped): stop and close.
+    func cameraReleased() {
+        camera.stop()
+        showCamera = false
+    }
+
     func startScan() {
         message = ""
         AVCaptureDevice.requestAccess(for: .video) { granted in
