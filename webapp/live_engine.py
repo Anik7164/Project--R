@@ -97,8 +97,8 @@ HOLD = {
     "blank": "The picture is black or blank (lens covered, or the wrong camera?): "
              "commentary is on hold.",
     "frozen": "The picture is not moving: commentary is on hold.",
-    "empty": "No match in view (no ball and no players together in the picture): "
-             "commentary is on hold.",
+    "empty": "No match in view (no players spread over the picture, only people close "
+             "to the camera or nobody): commentary is on hold.",
 }
 
 # Seconds after an event before it can be said: what its rule still needs
@@ -379,12 +379,15 @@ class PictureWatch:
       blank   black or one flat colour for BLANK seconds (lens cap, a
               virtual camera that is switched off)
       frozen  the very same picture for FROZEN seconds (a placeholder image)
-      empty   in the last EMPTY seconds neither the ball nor `need`
-              people together were seen in at least SEEN frames (a desk,
-              a wall, an empty pitch). Local footage often has one or two
-              tracked players in a frame, so this asks for little: on
-              the project's match videos it never fired, on a camera
-              pointed at nothing it always does.
+      empty   in the last EMPTY seconds too few frames showed a match:
+              `need` or more *small* people (players seen from the side
+              of a pitch, under SMALL of the picture's height) in at
+              least PLAYERS_SHARE of the frames. People close to the
+              camera (someone at a desk, in front of a webcam) do not
+              count, and the ball alone does not either: in a room the
+              ball model now and then sees a "ball" in a lamp or a face.
+              The ball helps only when players are seen too.
+              match5 (local match): 3+ small people in 89% of frames.
     Times are seconds of the match feed, except for "none"."""
 
     NO_PICTURE = 3.0
@@ -392,6 +395,10 @@ class PictureWatch:
     FROZEN = 5.0
     EMPTY = 20.0
     SEEN = 3
+    SMALL = 0.45            # a player's height, as a share of the picture's, at most
+    PLAYERS_SHARE = 0.3     # frames with players a match shows, at least
+    BALL_SHARE = 0.3        # ... or frames with the ball, when players show in BALL_PLAYERS
+    BALL_PLAYERS = 0.1
 
     def __init__(self, need, live):
         self.need, self.live = need, live
@@ -403,8 +410,14 @@ class PictureWatch:
         self._small = None
 
     def frame(self, at, picture, people, wall=None, ball=False):
+        """`people`: the heights of the people found, each as a share of the
+        picture's height (a plain number counts that many small people)."""
         self.last_at, self.last_wall = at, wall
-        self.people.append((at, people, bool(ball)))
+        if isinstance(people, (int, float)):
+            small = int(people)
+        else:
+            small = sum(1 for height in people if height <= self.SMALL)
+        self.people.append((at, small, bool(ball)))
         while self.people[0][0] < at - self.EMPTY:
             self.people.popleft()
         if picture is None:
@@ -433,10 +446,18 @@ class PictureWatch:
             return "blank"
         if self.same_since is not None and self.last_at - self.same_since >= self.FROZEN:
             return "frozen"
-        if self.need > 0 and sum(ball for _, _, ball in self.people) < self.SEEN \
-                and sum(people >= self.need for _, people, _ in self.people) < self.SEEN:
+        if self.need > 0 and not self._match_in_view():
             return "empty"
         return "ok"
+
+    def _match_in_view(self):
+        frames = len(self.people)
+        players = sum(small >= self.need for _, small, _ in self.people)
+        balls = sum(ball for _, _, ball in self.people)
+        if players >= max(self.SEEN, self.PLAYERS_SHARE * frames):
+            return True
+        return balls >= max(self.SEEN, self.BALL_SHARE * frames) \
+            and players >= max(1, self.BALL_PLAYERS * frames)
 
 
 # ----------------------------------------------------------------------
@@ -772,7 +793,7 @@ DEFAULTS = {
     "boxes": True,           # draw players and ball on the picture sent out
     "mic": "",               # ffmpeg sound input for a camera, e.g. audio=Microphone (USB)
     "start": 0.0,            # a file: start this many seconds in
-    "need_players": 2,       # no ball and never this many people together: nothing is said (0: off)
+    "need_players": 3,       # fewer small people than this in most frames: nothing is said (0: off)
 }
 
 
@@ -1134,8 +1155,9 @@ class LiveMatch:
             self._commit(*self.held.popleft())
 
         ball = self._find_ball(index, frame, width, warp, cut)
-        self.watch.frame(at, frame, len(rows), self.source.last_wall if self.source else None,
-                         ball is not None)
+        # Every person found (also those the tracker does not keep): how tall.
+        self.watch.frame(at, frame, [(d[1][3] - d[1][1]) / height for d in detections],
+                         self.source.last_wall if self.source else None, ball is not None)
         self.frames_done += 1
         self.clock = at
         if self.display_live:

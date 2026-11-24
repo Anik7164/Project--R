@@ -282,10 +282,16 @@ def test_picture_watch_tells_why_there_is_no_match_to_talk_about():
     for i in range(300):                                   # a desk: one person, no ball
         watch.frame(i / 10, _noise(i), 1, wall=i / 10)
     assert watch.state(wall=30.0) == "empty"
-    for i in range(300, 303):                              # the ball comes into view
-        watch.frame(i / 10, _noise(i), 1, wall=i / 10, ball=True)
-    assert watch.state(wall=30.3) == "ok"
-    assert watch.state(wall=40.0) == "none"                # the camera went quiet
+    for i in range(300, 310):                              # a lamp the ball model takes for a ball
+        watch.frame(i / 10, _noise(i), [0.9], wall=i / 10, ball=i % 2 == 0)
+    assert watch.state(wall=31.0) == "empty"
+    for i in range(310, 400):                              # people sitting close to a webcam
+        watch.frame(i / 10, _noise(i), [0.8, 0.7, 0.6, 0.3], wall=i / 10, ball=i % 3 == 0)
+    assert watch.state(wall=40.0) == "empty"
+    for i in range(400, 480):                              # the camera turns to the pitch
+        watch.frame(i / 10, _noise(i), [0.2, 0.15, 0.1, 0.12, 0.5], wall=i / 10)
+    assert watch.state(wall=48.0) == "ok"
+    assert watch.state(wall=58.0) == "none"                # the camera went quiet
 
     watch = PictureWatch(need=2, live=False)               # a video: no wall clock
     for i in range(3):
@@ -319,12 +325,12 @@ def test_no_line_at_all_while_the_camera_shows_no_match():
                                  "duration": 2.0}] if c["time"] <= until]
 
     match.sound = Sound()
-    for i in range(3):                       # the match comes into view at 1:01
+    for i in range(40):                      # the match comes into view at 1:01 (8 s of it)
         match.watch.frame(61.0 + i / 5, _noise(1000 + i), 6)
-    match.clock = 62.0
+    match.clock = 69.0
     match._tick()
     assert match.picture == "ok" and not _lines(said)
-    match.clock = 75.0
+    match.clock = 82.0
     match._tick()                            # play goes on: the filler is back
     assert [l["type"] for l in _lines(said)] == ["filler"]
 
