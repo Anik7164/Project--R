@@ -539,6 +539,11 @@ function connect() {
   const query = new URLSearchParams();
   if (key) query.set("key", key);
   if (BROADCAST) query.set("view", "air");
+  // The iPhone app: the PC lists this phone as a camera the operator can choose.
+  if (DEVICE?.id) {
+    query.set("app", DEVICE.id);
+    query.set("name", DEVICE.name || "iPhone");
+  }
   let socket;
   try {
     socket = new WebSocket(socketUrl(`/ws${query.toString() ? `?${query}` : ""}`));
@@ -568,6 +573,9 @@ function connect() {
       $("feedNote").hidden = !(over && message.lines.length);
     } else if (message.type === "cameras") {
       if (operator) loadCameras();
+    } else if (message.type === "camera_request") {
+      // The operator chose this iPhone as a camera: the app starts filming.
+      toApp({ action: "camera", token: message.token });
     } else if (message.type === "stats") onStats(message);
     else if (message.type === "line") onLine(message.line, false);
     else if (message.type === "audio") onVoice(message.id, message.url);
@@ -679,7 +687,7 @@ function seconds(text) {
 // ---- cameras: which device is camera 1, 2 and 3
 
 const slots = [...document.querySelectorAll(".camera-slot")];   // camera 1, 2, 3
-const ADDRESS = "address";            // "a network camera: type its address"
+const ADDRESS = "address";            // "an IP camera: type its rtsp:// address"
 let cameraList = [];
 const chosen = (() => {
   try { return JSON.parse(remembered("cameras")) || {}; } catch { return {}; }
@@ -710,11 +718,12 @@ function fillCameras(list) {
       const option = document.createElement("option");
       option.value = camera.id;
       option.textContent = camera.label;
+      if (camera.wake) option.dataset.wake = "1";     // an iPhone with the app: asked to film
       return option;
     }));
     const other = document.createElement("option");
     other.value = ADDRESS;
-    other.textContent = "A network camera (type its address)";
+    other.textContent = "An IP camera (type its rtsp:// address)";
     device.append(other);
     const values = [...device.options].map((option) => option.value);
     // Keep what was chosen; otherwise the first device the other camera does not have.
@@ -756,6 +765,19 @@ function onDeviceChosen(slot) {
   mine.address.hidden = mine.device.value !== ADDRESS;
   clearPreview(slot);
   saveCameras();
+  wakePhone(mine.device);
+}
+
+// An iPhone with the Project R app was chosen: it is asked to start its
+// camera now, so it is filming by the time Show or Start is pressed.
+async function wakePhone(device) {
+  const option = device.selectedOptions[0];
+  if (!option?.dataset.wake) return;
+  try {
+    await api("/api/camera/wake", { id: option.value.slice("phone:".length) });
+    const name = option.textContent.replace(/^iPhone: /, "").replace(/ \(app, starts by itself\)$/, "");
+    toast(`Asked the iPhone “${name}” to start its camera…`);
+  } catch (error) { showError(error); }
 }
 
 function swapCameras() {
@@ -1006,13 +1028,16 @@ async function boot() {
       }));
     }
     if (state.share) {
-      // What a phone on the same Wi-Fi needs to join (the iPhone app asks for both).
+      // What a phone on the same Wi-Fi needs to join: the address finds the PC,
+      // the password makes it the operator.
       $("share").hidden = false;
-      $("share").textContent = `Phones and other PCs on this Wi-Fi: viewers open ${state.share.url} · ` +
-        `the iPhone app and the operator use address ${state.share.address} with key ${state.share.key}`;
-      // The pairing link (projectr://…) opens the iPhone app; an older server: the page.
-      showShareQr(state.share.link || `${state.share.url}/?key=${encodeURIComponent(state.share.key)}`);
-      $("phoneSafari").textContent = `${state.share.url}/?key=${state.share.key}`;
+      $("share").textContent = `Phones and other PCs on this Wi-Fi open ${state.share.url} ` +
+        `(the iPhone app: address ${state.share.address}). Operating needs the password ` +
+        `${state.share.key}.`;
+      // The pairing link (projectr://…) opens the iPhone app; it only finds the PC.
+      showShareQr(state.share.link || `${state.share.url}/`);
+      $("phoneSafari").textContent = `${state.share.url}/`;
+      showPassword(state.share.key);
     } else if (operator && !IN_APP && !BROADCAST) {
       // Not shared on the Wi-Fi: the button says how to share instead of a code.
       $("shareQrCode").hidden = true;
@@ -1022,6 +1047,7 @@ async function boot() {
       phoneButton();
     }
     if (!operator) $("idleText").textContent = "The commentary starts when the operator starts the match.";
+    if (!operator && !BROADCAST && state.password) operateButton();
     $("soundOn").hidden = false;
     if (BROADCAST) {
       $("idleText").textContent = "The stream picture: the camera on air shows here when the match starts.";
@@ -1055,4 +1081,65 @@ function phoneButton() {
   $("phoneButton").hidden = false;
   $("phoneButton").onclick = () => $("phoneDialog").showModal();
   $("phoneClose").onclick = () => $("phoneDialog").close();
+}
+
+// The operator password, in "Connect a phone". Changed on the PC itself only.
+function showPassword(password) {
+  $("passwordBox").hidden = !password;
+  $("phonePassword").textContent = password || "";
+  $("changePassword").hidden = !LOCAL;
+  $("changePassword").onclick = () => {
+    $("passwordForm").hidden = false;
+    $("newPassword").value = "";
+    $("newPassword").focus();
+  };
+  $("passwordForm").onsubmit = async (event) => {
+    event.preventDefault();
+    const wanted = $("newPassword").value.trim();
+    try {
+      await api("/api/password", { password: wanted });
+      key = wanted;
+      remember(`key ${SERVER}`, key);
+      $("passwordForm").hidden = true;
+      $("phonePassword").textContent = wanted;
+      $("share").textContent = $("share").textContent.replace(/password \S+\.$/, `password ${wanted}.`);
+      toast("Password changed. Phones that operate type the new one.");
+    } catch (error) { toast(error.message || String(error)); }
+  };
+}
+
+// A viewer: "Operate" asks for the operator password. In the iPhone app the
+// app's own screen asks (it also needs the password for its camera).
+function operateButton() {
+  $("operateButton").hidden = false;
+  $("operateButton").onclick = () => {
+    if (window.PROJECT_R_NATIVE) { toApp("change"); return; }
+    $("operateError").textContent = "";
+    $("operatePassword").value = "";
+    $("operateDialog").showModal();
+    $("operatePassword").focus();
+  };
+  $("operateCancel").onclick = () => $("operateDialog").close();
+  $("operateForm").onsubmit = async (event) => {
+    event.preventDefault();
+    const wanted = $("operatePassword").value.trim();
+    if (!wanted) { $("operateError").textContent = "Type the password."; return; }
+    $("operateGo").disabled = true;
+    try {
+      const response = await fetch(serverUrl("/api/state"), { headers: { "X-Key": wanted } });
+      const answer = await response.json().catch(() => ({}));
+      if (!response.ok || !answer.operator) {
+        $("operateError").textContent = "That password is not right. The PC shows it under Connect a phone.";
+        return;
+      }
+      remember(`key ${SERVER}`, wanted);
+      const url = new URL(location.href);
+      url.searchParams.delete("key");          // remembered: not left in the address bar
+      location.replace(url.toString());
+    } catch (error) {
+      $("operateError").textContent = `No answer from the PC (${error.message || error}).`;
+    } finally {
+      $("operateGo").disabled = false;
+    }
+  };
 }

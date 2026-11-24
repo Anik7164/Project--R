@@ -7,6 +7,11 @@ import UIKit
 /// same socket the web camera page uses. The PC lists it as
 /// "Phone camera: <name>" for Camera 1, 2 or 3.
 ///
+/// Started by the operator choosing this iPhone on the PC (the PC hands the
+/// app a token for it, so a watching phone can film too), or by hand with
+/// the operator password. Either way it goes with this phone's id, so the
+/// PC keeps one entry for it.
+///
 /// No video stream: a picture is packed when one is due (FRAME_GAP) and only
 /// while fewer than 2 are still on their way, so slow Wi-Fi never builds lag.
 final class CameraSender: NSObject, ObservableObject, AVCaptureVideoDataOutputSampleBufferDelegate,
@@ -41,12 +46,15 @@ final class CameraSender: NSObject, ObservableObject, AVCaptureVideoDataOutputSa
     private var orientation: CGImagePropertyOrientation = .up
 
     @MainActor
-    func start(base: URL, key: String, name: String, back: Bool) {
+    func start(base: URL, key: String, name: String, back: Bool, token: String = "", app: String = "") {
         guard !running else { return }
         guard var parts = URLComponents(url: base, resolvingAgainstBaseURL: false) else { return }
         parts.scheme = base.scheme == "https" ? "wss" : "ws"
         parts.path = "/ws/camera"
-        parts.queryItems = [URLQueryItem(name: "name", value: name), URLQueryItem(name: "key", value: key)]
+        var query = [URLQueryItem(name: "name", value: name), URLQueryItem(name: "key", value: key)]
+        if !token.isEmpty { query.append(URLQueryItem(name: "token", value: token)) }
+        if !app.isEmpty { query.append(URLQueryItem(name: "app", value: app)) }
+        parts.queryItems = query
         target = parts.url
         self.back = back
         running = true
@@ -244,7 +252,7 @@ final class CameraSender: NSObject, ObservableObject, AVCaptureVideoDataOutputSa
         work.async { self.open = false }
         if reason.contains("operator key") {
             stop()
-            status = "Only the operator can add a camera. Scan the PC's QR code (it carries the key) and try again."
+            status = "Only the operator can start a camera from here. On the PC, choose this iPhone under Camera 1, 2 or 3: it then starts filming by itself."
             return
         }
         status = "Lost the PC, connecting again…"

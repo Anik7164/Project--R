@@ -125,14 +125,15 @@ struct ScannerSheet: View {
     }
 }
 
-/// "Use this device as a camera" on the match page opens this.
+/// "Use this device as a camera" on the match page opens this, and so does
+/// the operator choosing this iPhone on the PC (then it is already filming).
 struct CameraScreen: View {
     @ObservedObject var sender: CameraSender
     let base: URL
     let key: String
     @Environment(\.dismiss) private var dismiss
     @State private var name = Store.cameraName
-    @State private var back = true
+    @State private var back = Store.cameraBack
 
     var body: some View {
         NavigationStack {
@@ -147,7 +148,7 @@ struct CameraScreen: View {
                             .background(Color.red, in: Capsule())
                             .padding(10)
                     } else {
-                        Text("The camera starts when you press Start.")
+                        Text("The camera starts when you press Start, or when the operator chooses this iPhone on the PC.")
                             .font(.footnote)
                             .foregroundStyle(.secondary)
                             .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -176,15 +177,15 @@ struct CameraScreen: View {
                     }
                     .pickerStyle(.segmented)
                     Button {
-                        let given = name.trimmingCharacters(in: .whitespaces)
-                        Store.cameraName = given
-                        sender.start(base: base, key: key, name: given.isEmpty ? "iPhone" : given, back: back)
+                        Store.cameraName = name.trimmingCharacters(in: .whitespaces)
+                        Store.cameraBack = back
+                        sender.start(base: base, key: key, name: Store.phoneName, back: back, app: Store.deviceID)
                     } label: {
                         Text("Start sending to the PC").frame(maxWidth: .infinity)
                     }
                     .buttonStyle(.borderedProminent)
                 }
-                Text("On the PC, choose “Phone camera: …” for Camera 1, 2 or 3. Keep this screen open while it films; the phone stays awake.")
+                Text("On the PC, choose this iPhone (“\(Store.phoneName)”) for Camera 1, 2 or 3. Keep this screen open while it films; the phone stays awake.")
                     .font(.footnote)
                     .foregroundStyle(.secondary)
                     .multilineTextAlignment(.center)

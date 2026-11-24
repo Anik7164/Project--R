@@ -482,6 +482,122 @@ def test_two_cameras_are_chosen_by_hand_and_a_phone_can_be_one(tmp_path, monkeyp
         assert client.get("/camera.html").status_code == 200
 
 
+def test_viewers_need_no_password_and_a_chosen_iphone_starts_filming(tmp_path, monkeypatch):
+    import threading
+
+    import cv2
+    from fastapi.testclient import TestClient
+    from starlette.websockets import WebSocketDisconnect
+
+    import server
+
+    monkeypatch.setattr(server, "VIDEO_DIR", tmp_path)
+    monkeypatch.setattr(server, "camera_names", lambda: {0: "Laptop camera"})
+    monkeypatch.setattr(server, "save_operator_key", lambda key: None)
+    monkeypatch.setattr(server, "wrong_passwords", {})
+    started = []
+
+    class FakeMatch:
+        state, id, spec, other_specs = "running", "x", None, []
+
+        def __init__(self, spec, settings, publish_json, publish_bytes, second=None, others=None):
+            self.spec, self.other_specs = spec, list(others or [])
+            started.append(spec)
+
+        def start(self):
+            pass
+
+        def stop(self):
+            self.state = "ended"
+
+        def hello(self):
+            return {"type": "hello", "stats": {}, "lines": [], "notes": []}
+
+    def until(socket_, kind):
+        while True:
+            message = socket_.receive_json()
+            if message.get("type") == kind:
+                return message
+
+    monkeypatch.setattr(live_engine, "LiveMatch", FakeMatch)
+    ok, jpeg = cv2.imencode(".jpg", np.full((90, 160, 3), 120, dtype=np.uint8))
+    op = {"X-Key": "secret"}
+    with TestClient(server.app) as client:
+        monkeypatch.setattr(server.hub, "match", None)
+        monkeypatch.setattr(server.hub, "key", "secret")
+        monkeypatch.setattr(server.hub, "apps", {})
+        monkeypatch.setattr(server.hub, "camera_tokens", {})
+        # Watching needs nothing; the page knows a password makes it the operator.
+        state = client.get("/api/state").json()
+        assert not state["operator"] and state["password"]
+        assert client.get("/api/state", headers=op).json()["operator"]
+        # The pairing link only finds the PC: no password in it.
+        assert "k=" not in client.get("/connect/info").json()["link"]
+
+        # A watching iPhone with the app open is a camera the operator can choose...
+        with client.websocket_connect("/ws?app=abc&name=Goal%20side") as iphone:
+            cameras = client.get("/api/cameras", headers=op).json()["cameras"]
+            assert cameras[-1] == {"id": "phone:app-abc", "wake": True,
+                                   "label": "iPhone: Goal side (app, starts by itself)"}
+            # ... and choosing it asks the app to film, with a token for this phone only.
+            assert client.post("/api/camera/wake", json={"id": "app-abc"}).status_code == 403
+            assert client.post("/api/camera/wake", json={"id": "app-abc"}, headers=op).json() == \
+                {"ok": True, "sending": False}
+            token = until(iphone, "camera_request")["token"]
+            for wrong in (f"/ws/camera?app=abc&token=nope", f"/ws/camera?app=xyz&token={token}"):
+                with pytest.raises(WebSocketDisconnect) as refused:
+                    with client.websocket_connect(wrong) as camera:
+                        camera.receive_json()
+                assert refused.value.code == 4403
+            with client.websocket_connect(f"/ws/camera?app=abc&token={token}&name=Goal%20side") as camera:
+                assert camera.receive_json() == {"id": "app-abc", "name": "Goal side"}
+                camera.send_bytes(jpeg.tobytes())
+                cameras = client.get("/api/cameras", headers=op).json()["cameras"]
+                assert [c["id"] for c in cameras].count("phone:app-abc") == 1
+                assert cameras[-1] == {"id": "phone:app-abc", "label": "Phone camera: Goal side"}
+            # It stopped filming: it is still there, to be asked again.
+            assert client.get("/api/cameras", headers=op).json()["cameras"][-1]["wake"]
+
+            # Start with it as camera 1: the PC asks it and waits for its picture.
+            answer = {}
+
+            def start():
+                answer["start"] = client.post("/api/start", headers=op, json={
+                    "source": {"kind": "phone", "id": "app-abc"}})
+
+            starting = threading.Thread(target=start)
+            starting.start()
+            token = until(iphone, "camera_request")["token"]
+            with client.websocket_connect(f"/ws/camera?app=abc&token={token}&name=Goal%20side") as camera:
+                camera.receive_json()
+                camera.send_bytes(jpeg.tobytes())
+                starting.join(10)
+                assert answer["start"].status_code == 200
+                assert started[-1]["feed"].name == "Goal side"
+                client.post("/api/stop", headers=op)
+        # The app closed: gone from the list, and it cannot be started.
+        assert all(c["id"] != "phone:app-abc"
+                   for c in client.get("/api/cameras", headers=op).json()["cameras"])
+        gone = client.post("/api/start", headers=op, json={"source": {"kind": "phone", "id": "app-abc"}})
+        assert gone.status_code == 400 and "not connected" in gone.json()["detail"]
+
+        # The password is changed on the PC itself only.
+        assert client.post("/api/password", headers=op, json={"password": "goal2026"}).status_code == 403
+        monkeypatch.setattr(server, "LOOPBACK", server.LOOPBACK | {"testclient"})
+        assert client.post("/api/password", json={"password": "abc"}).status_code == 400
+        assert client.post("/api/password", json={"password": "goal2026"}).json() == {"ok": True}
+        monkeypatch.setattr(server, "LOOPBACK", server.LOOPBACK - {"testclient"})
+        assert not client.get("/api/state", headers=op).json()["operator"]
+        assert client.get("/api/state", headers={"X-Key": "goal2026"}).json()["operator"]
+
+        # Guessing: after 10 wrong passwords even the right one waits a minute.
+        for _ in range(10):
+            assert not client.get("/api/state", headers={"X-Key": "guess"}).json()["operator"]
+        assert not client.get("/api/state", headers={"X-Key": "goal2026"}).json()["operator"]
+        server.wrong_passwords.clear()
+        assert client.get("/api/state", headers={"X-Key": "goal2026"}).json()["operator"]
+
+
 def test_three_cameras_side_by_side_and_viewers_see_the_one_on_air(tmp_path, monkeypatch):
     import asyncio
     import struct

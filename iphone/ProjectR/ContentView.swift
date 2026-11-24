@@ -15,6 +15,8 @@ struct ContentView: View {
                 ConnectView()
             case .connecting(let name):
                 ConnectingView(name: name)
+            case .role:
+                RoleView()
             case .match(let url):
                 MatchView(url: url)
             }
@@ -30,7 +32,6 @@ struct ConnectView: View {
     @EnvironmentObject private var model: AppModel
     @EnvironmentObject private var finder: ServerFinder
     @State private var address = ""
-    @State private var key = ""
 
     var body: some View {
         NavigationStack {
@@ -66,7 +67,7 @@ struct ConnectView: View {
                             .font(.headline)
                     }
                 } footer: {
-                    Text("On the PC, start Project R (phones on the Wi-Fi can join) and click Connect a phone. The QR code also makes this phone the operator.")
+                    Text("On the PC, start Project R (phones on the Wi-Fi can join) and click Connect a phone. Then watch the match, or operate it with the password the PC shows.")
                 }
 
                 Section {
@@ -86,8 +87,7 @@ struct ConnectView: View {
                                 Image(systemName: "desktopcomputer")
                                 VStack(alignment: .leading, spacing: 2) {
                                     Text(pc.name).foregroundStyle(.primary)
-                                    Text(pc.hosts.joined(separator: ", ") + " · port \(pc.port)" +
-                                         (pc.key.isEmpty ? " · watch only (scan to operate)" : " · operator"))
+                                    Text(pc.hosts.joined(separator: ", ") + " · port \(pc.port)")
                                         .font(.caption)
                                         .foregroundStyle(.secondary)
                                 }
@@ -116,27 +116,130 @@ struct ConnectView: View {
                         .keyboardType(.URL)
                         .textInputAutocapitalization(.never)
                         .autocorrectionDisabled()
-                    TextField("Operator key (empty: only watch)", text: $key)
-                        .textInputAutocapitalization(.never)
-                        .autocorrectionDisabled()
                     Button("Connect") {
-                        guard var pc = PC.parse(address) else {
+                        guard let pc = PC.parse(address) else {
                             model.message = "That does not look like an address. Type it as the PC shows it, for example 192.168.0.5:8000."
                             return
                         }
-                        let typed = key.trimmingCharacters(in: .whitespaces)
-                        if !typed.isEmpty { pc.key = typed }
                         model.connect(pc)
                     }
                 } header: {
                     Text("Or type the address")
                 } footer: {
-                    Text("For Wi-Fi that hides PCs from each other (universities, hotels). The PC shows its address and key under Settings.")
+                    Text("For Wi-Fi that hides PCs from each other (universities, hotels). The PC shows its address under Connect a phone.")
                 }
             }
             .navigationTitle("Project R")
             .refreshable { finder.restart() }
         }
+    }
+}
+
+/// Found the PC: watch the match, or operate it with the operator password.
+struct RoleView: View {
+    @EnvironmentObject private var model: AppModel
+    @State private var password = ""
+    @State private var name = Store.cameraName
+    @FocusState private var typing: Bool
+
+    var body: some View {
+        NavigationStack {
+            List {
+                Section {
+                    HStack(spacing: 14) {
+                        Image(systemName: "desktopcomputer")
+                            .font(.system(size: 30))
+                            .foregroundStyle(Color.pitch)
+                        VStack(alignment: .leading, spacing: 4) {
+                            Text(model.current?.name ?? "PC").font(.title3.bold())
+                            Text("Connected. Watch the match, or operate it with the password.")
+                                .font(.footnote)
+                                .foregroundStyle(.secondary)
+                        }
+                    }
+                    .padding(.vertical, 6)
+                }
+
+                if !model.message.isEmpty {
+                    Section {
+                        Text(model.message)
+                            .font(.footnote)
+                            .foregroundStyle(.orange)
+                    }
+                }
+
+                Section {
+                    Button {
+                        keepName()
+                        model.watch()
+                    } label: {
+                        Label("Watch the match", systemImage: "play.tv")
+                            .font(.headline)
+                    }
+                } header: {
+                    Text("Viewer")
+                } footer: {
+                    Text("The picture, the Bengali commentary and the voice. No password.")
+                }
+
+                Section {
+                    if model.needsPassword {
+                        SecureField("Operator password", text: $password)
+                            .textContentType(.password)
+                            .textInputAutocapitalization(.never)
+                            .autocorrectionDisabled()
+                            .submitLabel(.go)
+                            .focused($typing)
+                            .onSubmit(operate)
+                    }
+                    Button(action: operate) {
+                        HStack {
+                            Label("Operate", systemImage: "slider.horizontal.3")
+                                .font(.headline)
+                            if model.checking {
+                                Spacer()
+                                ProgressView()
+                            }
+                        }
+                    }
+                    .disabled(model.checking)
+                } header: {
+                    Text("Operator")
+                } footer: {
+                    Text(model.needsPassword
+                         ? "Start and stop the match, choose the cameras, press the event buttons. The PC shows the password under Connect a phone."
+                         : "This PC needs no password.")
+                }
+
+                Section {
+                    TextField("This phone's name, for example: Goal side", text: $name)
+                        .autocorrectionDisabled()
+                        .onSubmit(keepName)
+                } header: {
+                    Text("This phone as a camera")
+                } footer: {
+                    Text("While the app is open, the PC lists this phone as a camera. When the operator chooses it there, it starts filming by itself.")
+                }
+
+                Section {
+                    Button("Another PC") { model.disconnect() }
+                }
+            }
+            .navigationTitle("Watch or operate")
+            .onAppear {
+                if password.isEmpty { password = model.savedKey }
+            }
+        }
+    }
+
+    private func keepName() {
+        Store.cameraName = name.trimmingCharacters(in: .whitespaces)
+    }
+
+    private func operate() {
+        typing = false
+        keepName()
+        model.operate(password: password)
     }
 }
 
@@ -167,14 +270,16 @@ struct MatchView: View {
 
     var body: some View {
         WebPage(url: url,
-                onChangePC: { model.disconnect() },
+                device: (id: Store.deviceID, name: Store.phoneName),
+                onChangePC: { model.chooseRole() },
                 onCamera: { model.showCamera = true },
+                onCameraRequest: { model.cameraRequested(token: $0) },
                 onFailed: { model.failed($0) })
             .ignoresSafeArea(edges: [.bottom, .horizontal])
             .background(Color.night.ignoresSafeArea())
             .sheet(isPresented: $model.showCamera) {
                 if let base = model.base {
-                    CameraScreen(sender: model.camera, base: base, key: model.current?.key ?? "")
+                    CameraScreen(sender: model.camera, base: base, key: model.operatorKey)
                 }
             }
     }

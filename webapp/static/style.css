@@ -198,7 +198,7 @@ body.viewer .op-only { display: none !important; }
 .feed-head h2 { font: 700 20px var(--bn); text-transform: none; letter-spacing: 0; color: var(--text); }
 label { display: grid; gap: 4px; font-size: 12px; color: var(--muted); }
 label.check { display: flex; align-items: center; gap: 8px; color: var(--text); font-size: 13px; }
-input[type=text], input[type=number], select {
+input[type=text], input[type=number], input[type=password], select {
   background: var(--bg); color: var(--text); border: 1px solid var(--line); border-radius: 7px;
   padding: 8px 10px; font: inherit; min-width: 0; width: 100%;
 }
@@ -326,6 +326,15 @@ a.button:hover { border-color: var(--muted); }
 .phone-dialog .qr { background: #fff; border-radius: 10px; line-height: 0; padding: 4px; }
 .phone-dialog .qr svg { width: 100%; height: auto; }
 .phone-dialog p { margin: 0; font-size: 13px; color: var(--muted); overflow-wrap: anywhere; }
+.phone-dialog form { display: grid; gap: 12px; margin: 0; }
+.phone-dialog .error { color: #ff9b7a; min-height: 1em; }
+.phone-dialog .buttons { display: flex; gap: 8px; flex-wrap: wrap; }
+.password-box { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
+.password-box p { color: var(--text); font-size: 15px; }
+.password-box b { font-family: ui-monospace, Menlo, Consolas, monospace; letter-spacing: .04em; }
+.password-form { display: flex !important; gap: 8px; }
+.password-form[hidden] { display: none !important; }
+.password-form input { flex: 1; min-width: 0; }
 body { padding: env(safe-area-inset-top) env(safe-area-inset-right) env(safe-area-inset-bottom) env(safe-area-inset-left); }
 @media (max-width: 560px) {
   .top-right { flex-direction: column; align-items: flex-end; gap: 4px; }

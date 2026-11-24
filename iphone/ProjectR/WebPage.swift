@@ -4,12 +4,17 @@ import WebKit
 
 /// The PC's match page (the same page Safari shows), inside the app.
 /// The page knows it is in the app (window.PROJECT_R_NATIVE): its
-/// "PC … change" calls back here, and "Use this device as a camera" opens
-/// the native camera, which can film over plain http where Safari cannot.
+/// "PC … change" and "Operate" call back here, and "Use this device as a
+/// camera" opens the native camera, which can film over plain http where
+/// Safari cannot. It also knows which phone this is (window.PROJECT_R_DEVICE):
+/// the PC lists the phone as a camera, and when the operator chooses it the
+/// page passes the PC's request on ({action: "camera", token}).
 struct WebPage: UIViewRepresentable {
     let url: URL
+    let device: (id: String, name: String)
     let onChangePC: () -> Void
     let onCamera: () -> Void
+    let onCameraRequest: (String) -> Void
     let onFailed: (String) -> Void
 
     func makeCoordinator() -> Coordinator {
@@ -20,8 +25,8 @@ struct WebPage: UIViewRepresentable {
         let configuration = WKWebViewConfiguration()
         configuration.allowsInlineMediaPlayback = true
         configuration.mediaTypesRequiringUserActionForPlayback = []     // the commentary voice plays by itself
-        let flag = WKUserScript(source: "window.PROJECT_R_NATIVE = true;", injectionTime: .atDocumentStart,
-                                forMainFrameOnly: true)
+        let flag = WKUserScript(source: "window.PROJECT_R_NATIVE = true;" + WebPage.deviceScript(device),
+                                injectionTime: .atDocumentStart, forMainFrameOnly: true)
         configuration.userContentController.addUserScript(flag)
         configuration.userContentController.add(context.coordinator, name: "projectr")
         let web = WKWebView(frame: .zero, configuration: configuration)
@@ -43,6 +48,13 @@ struct WebPage: UIViewRepresentable {
         }
     }
 
+    /// window.PROJECT_R_DEVICE = {"id": …, "name": …}, as JSON so any name is safe.
+    static func deviceScript(_ device: (id: String, name: String)) -> String {
+        guard let data = try? JSONSerialization.data(withJSONObject: ["id": device.id, "name": device.name]),
+              let json = String(data: data, encoding: .utf8) else { return "" }
+        return " window.PROJECT_R_DEVICE = \(json);"
+    }
+
     static func dismantleUIView(_ web: WKWebView, coordinator: Coordinator) {
         web.configuration.userContentController.removeScriptMessageHandler(forName: "projectr")
         web.stopLoading()
@@ -58,7 +70,14 @@ struct WebPage: UIViewRepresentable {
 
         func userContentController(_ userContentController: WKUserContentController,
                                    didReceive message: WKScriptMessage) {
-            if (message.body as? String) == "change" { parent.onChangePC() }
+            if let text = message.body as? String {
+                if text == "change" { parent.onChangePC() }
+                return
+            }
+            if let body = message.body as? [String: Any], body["action"] as? String == "camera",
+               let token = body["token"] as? String, !token.isEmpty {
+                parent.onCameraRequest(token)
+            }
         }
 
         func webView(_ webView: WKWebView, decidePolicyFor navigationAction: WKNavigationAction,

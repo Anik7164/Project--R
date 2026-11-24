@@ -1,4 +1,5 @@
 import Foundation
+import UIKit
 
 /// A PC that runs Project R. One PC can have several addresses (Wi-Fi,
 /// Ethernet, hotspot), so it keeps the whole list and the app tries each.
@@ -15,7 +16,8 @@ struct PC: Identifiable, Codable, Equatable {
     }
 
     /// Reads what a QR code or the person gives:
-    /// - the pairing link  projectr://connect?h=192.168.1.10,10.0.0.5&p=8000&k=KEY&n=PC
+    /// - the pairing link  projectr://connect?h=192.168.1.10,10.0.0.5&p=8000&n=PC
+    ///   (it only finds the PC; older PCs also put the key in it: &k=KEY)
     /// - an operator address  http://192.168.1.10:8000/?key=KEY  (older PCs)
     /// - a typed  192.168.1.10, 192.168.1.10:8000  or  ws://192.168.1.10:8000/ws
     static func parse(_ text: String) -> PC? {
@@ -66,7 +68,7 @@ enum Store {
         }
     }
 
-    /// The operator key of a PC, by its name, once a QR code gave it.
+    /// The operator password of a PC, by its name, once it was right.
     static func key(for name: String) -> String {
         defaults.string(forKey: "key \(name)") ?? ""
     }
@@ -75,8 +77,37 @@ enum Store {
         defaults.set(key, forKey: "key \(name)")
     }
 
+    /// "watch" or "operate": what this phone chose on that PC last time.
+    static func role(for name: String) -> String {
+        defaults.string(forKey: "role \(name)") ?? ""
+    }
+
+    static func setRole(_ role: String, for name: String) {
+        defaults.set(role, forKey: "role \(name)")
+    }
+
+    /// What the person called this phone (the PC lists it as a camera by it).
     static var cameraName: String {
         get { defaults.string(forKey: "cameraName") ?? "" }
         set { defaults.set(newValue, forKey: "cameraName") }
+    }
+
+    @MainActor static var phoneName: String {
+        let given = cameraName.trimmingCharacters(in: .whitespaces)
+        return given.isEmpty ? UIDevice.current.name : given
+    }
+
+    /// The back camera (true) or the front one, as last chosen.
+    static var cameraBack: Bool {
+        get { defaults.object(forKey: "cameraBack") as? Bool ?? true }
+        set { defaults.set(newValue, forKey: "cameraBack") }
+    }
+
+    /// This phone, the same every time: the PC keeps one camera entry for it.
+    static var deviceID: String {
+        if let id = defaults.string(forKey: "deviceID"), !id.isEmpty { return id }
+        let id = UUID().uuidString.lowercased()
+        defaults.set(id, forKey: "deviceID")
+        return id
     }
 }

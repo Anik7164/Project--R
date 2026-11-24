@@ -26,9 +26,19 @@ function remember(name, value) {
 }
 
 let SERVER = SHELL ? (remembered("server") || "") : "";
-let key = new URLSearchParams(location.search).get("key") || "";
-if (key) remember(`key ${SERVER}`, key);          // the operator address was opened once
+// The operator password. "?key=" given (also empty, the app watching) wins
+// and is remembered; otherwise the one typed here earlier.
+const pageQuery = new URLSearchParams(location.search);
+let key = pageQuery.get("key") || "";
+if (pageQuery.has("key")) remember(`key ${SERVER}`, key);
 else key = remembered(`key ${SERVER}`) || "";
+
+// The native iPhone app (iphone/) says which phone this is, so the operator
+// can choose it as a camera without typing anything; toApp() talks back to it.
+const DEVICE = window.PROJECT_R_DEVICE || null;
+function toApp(message) {
+  try { window.webkit?.messageHandlers?.projectr?.postMessage(message); } catch { /* not the app */ }
+}
 
 // A server path as an address this page can fetch.
 const serverUrl = (path) => (/^(https?:|blob:|data:)/.test(path) ? path : SERVER + path);
@@ -253,7 +263,7 @@ function showServer(element) {
     element.textContent = `PC ${location.host} · change`;
     element.onclick = () => {
       // The native app (iphone/) listens for this; the older Capacitor app has its own page.
-      if (window.PROJECT_R_NATIVE) window.webkit?.messageHandlers?.projectr?.postMessage("change");
+      if (window.PROJECT_R_NATIVE) toApp("change");
       else location.href = "capacitor://localhost/?change=1";
     };
     return;

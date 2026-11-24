@@ -27,6 +27,7 @@
   <div class="top-right">
     <button class="ghost server" id="serverName" hidden></button>
     <button class="ghost" id="phoneButton" hidden>Connect a phone</button>
+    <button class="ghost" id="operateButton" hidden>Operate</button>
     <div class="status" id="status"><span class="dot"></span><span id="statusText">Not connected</span></div>
   </div>
 </header>
@@ -35,10 +36,37 @@
   <h3>Connect a phone</h3>
   <div class="qr" id="shareQrCode"></div>
   <p id="phoneText">Point the iPhone's camera at this code (or tap <b>Scan the QR code</b> in the
-    Project R app). The app opens and joins as operator: it can run the match and be a camera.
-    The phone has to be on the same Wi-Fi.</p>
+    Project R app). The phone has to be on the same Wi-Fi. Then it chooses
+    <b>Watch the match</b>, or <b>Operate</b> with the password below.</p>
+  <div class="password-box" id="passwordBox" hidden>
+    <p>Operator password: <b id="phonePassword"></b></p>
+    <button type="button" class="ghost" id="changePassword" hidden>Change</button>
+  </div>
+  <form class="password-form" id="passwordForm" hidden>
+    <input type="text" id="newPassword" minlength="4" maxlength="64" autocomplete="off"
+      autocapitalize="off" spellcheck="false" placeholder="New password (4 or more letters)"
+      aria-label="New operator password" required>
+    <button type="submit">Save</button>
+  </form>
+  <p class="hint">An iPhone with the app open is a camera too: choose it under Camera 1, 2 or 3
+    and it starts filming by itself.</p>
   <p class="hint">Without the app, open this in Safari: <span id="phoneSafari"></span></p>
   <button type="button" id="phoneClose">Close</button>
+</dialog>
+
+<dialog class="phone-dialog" id="operateDialog">
+  <form method="dialog" id="operateForm">
+    <h3>Operate the match</h3>
+    <p>Type the operator password. The PC shows it under <b>Connect a phone</b>.</p>
+    <input type="password" id="operatePassword" autocomplete="current-password"
+      autocapitalize="off" spellcheck="false" placeholder="Operator password"
+      aria-label="Operator password">
+    <p class="error" id="operateError" role="alert"></p>
+    <div class="buttons">
+      <button type="submit" class="primary" id="operateGo">Operate</button>
+      <button type="button" class="ghost" id="operateCancel">Only watch</button>
+    </div>
+  </form>
 </dialog>
 
 <main class="layout">
@@ -216,6 +244,8 @@
               <img alt="Picture from camera 3" hidden>
             </div>
           </div>
+          <p class="hint">An iPhone with the Project R app open is in the list by itself: choose it and
+            it starts filming. Only an IP camera needs its rtsp:// address typed.</p>
           <div class="buttons">
             <button type="button" class="ghost" id="refreshCameras">Look for cameras again</button>
             <a class="button ghost" id="cameraPage" href="camera.html">Use this device as a camera</a>

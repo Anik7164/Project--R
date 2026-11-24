@@ -123,6 +123,8 @@ class Hub:
         self.match = None
         self.key = None    # operator key; None: anyone who can open the page
         self.phones = {}   # id -> PushFeed: devices sending their camera in
+        self.apps = {}     # app id -> {"name", "client"}: iPhones with the Project R app open
+        self.camera_tokens = {}      # token -> app id: handed to an app asked to start its camera
         self.share = None  # {"address", "key"}: what a phone on the Wi-Fi types to join
         self.warm = False  # load the models when the server starts (main() sets it)
 
@@ -168,10 +170,44 @@ def in_folder(folder, name):
     return path
 
 
+LOOPBACK = {"127.0.0.1", "::1", "localhost"}
+
+
+def client_host(connection):
+    return connection.client.host if connection.client else ""
+
+
+WRONG_LIMIT, WRONG_PAUSE = 10, 60.0    # wrong passwords from one device, then a pause
+wrong_passwords = {}                    # host -> [count, monotonic time of the last one]
+
+
+def is_operator(key, host=""):
+    """The operator password (key) is right, or this is the PC itself
+    (the desktop app's window): it always runs the match. A device that
+    gives a wrong password 10 times waits a minute before it is believed."""
+    if not hub.key or host in LOOPBACK:
+        return True
+    key = str(key or "")
+    if not key:
+        return False
+    import time
+
+    count, at = wrong_passwords.get(host, (0, 0.0))
+    if count >= WRONG_LIMIT and time.monotonic() - at < WRONG_PAUSE:
+        return False
+    if secrets.compare_digest(key, hub.key):
+        wrong_passwords.pop(host, None)
+        return True
+    if time.monotonic() - at >= WRONG_PAUSE:
+        count = 0
+    wrong_passwords[host] = [count + 1, time.monotonic()]
+    return False
+
+
 def need_operator(request: Request):
-    if hub.key and not secrets.compare_digest(request.headers.get("x-key", ""), hub.key):
-        raise HTTPException(403, "This page can only watch. Open the operator address "
-                                 "printed in the terminal.")
+    if not is_operator(request.headers.get("x-key", ""), client_host(request)):
+        raise HTTPException(403, "This page can only watch. Operating needs the operator "
+                                 "password (Connect a phone on the PC shows it).")
 
 
 def list_videos():
@@ -248,7 +284,49 @@ def list_cameras():
                for number, name in sorted(names.items())]
     cameras += [{"id": f"phone:{phone}", "label": f"Phone camera: {feed.name}"}
                 for phone, feed in hub.phones.items()]
+    # iPhones with the app open: chosen here, they start their camera by themselves.
+    cameras += [{"id": f"phone:app-{app_id}", "wake": True,
+                 "label": f"iPhone: {app['name']} (app, starts by itself)"}
+                for app_id, app in hub.apps.items() if f"app-{app_id}" not in hub.phones]
     return cameras
+
+
+def wake_phone(phone):
+    """Asks the iPhone app behind "app-<id>" to start sending its camera."""
+    app = hub.apps.get(phone[4:]) if phone.startswith("app-") else None
+    if app is None:
+        return False
+    token = secrets.token_urlsafe(9)
+    hub.camera_tokens[token] = phone[4:]
+    app["client"].put_nowait({"type": "camera_request", "token": token})
+    return True
+
+
+def sending(phone):
+    """Is this phone connected and has it sent a picture?"""
+    feed = hub.phones.get(phone)
+    return feed is not None and feed.jpeg is not None
+
+
+async def phones_awake(sources, seconds=15.0):
+    """Before a start: chosen iPhones that are not sending yet are asked to,
+    and waited for."""
+    waiting = []
+    for source in sources:
+        phone = str((source or {}).get("id", "")) if (source or {}).get("kind") == "phone" else ""
+        if phone.startswith("app-") and not sending(phone):
+            if phone not in hub.phones and not wake_phone(phone):
+                raise HTTPException(400, "That iPhone is not connected any more. Open the "
+                                         "Project R app on it, then choose it again.")
+            waiting.append(phone)
+    loop = asyncio.get_running_loop()
+    deadline = loop.time() + seconds
+    while waiting and loop.time() < deadline:
+        await asyncio.sleep(0.3)
+        waiting = [phone for phone in waiting if not sending(phone)]
+    if waiting:
+        raise HTTPException(400, "The iPhone did not start its camera. Is the Project R app "
+                                 "open on it, and is the camera allowed for it?")
 
 
 def source_spec(source, live_only=False):
@@ -307,10 +385,10 @@ def state(request: Request):
     from appearance import BENGALI_COLOUR_NAMES
     from live_engine import DEFAULTS
 
-    operator = not hub.key or secrets.compare_digest(
-        request.headers.get("x-key", ""), hub.key)
+    operator = is_operator(request.headers.get("x-key", ""), client_host(request))
     return {
         "operator": operator,
+        "password": bool(hub.key),          # operating needs the operator password
         "match": hub.match.hello() if hub.match else None,
         "videos": list_videos() if operator else [],
         "mics": list_microphones() if operator else [],
@@ -347,6 +425,7 @@ async def start(request: Request):
     from live_engine import MAX_CAMERAS, LiveMatch
 
     body = await request.json()
+    await phones_awake([body.get("source"), *(body.get("others") or []), body.get("second")])
     spec = source_spec(body.get("source"))
     # Cameras 2 and 3 are shown beside camera 1 and can be put on air; which
     # device is which is the operator's choice on the page.
@@ -377,11 +456,49 @@ def cameras(request: Request):
     return {"cameras": list_cameras()}
 
 
+@app.post("/api/camera/wake")
+async def camera_wake(request: Request):
+    """The operator chose an iPhone with the app: it starts its camera now,
+    so its picture is there for Show and Start."""
+    need_operator(request)
+    body = await request.json()
+    phone = str(body.get("id", ""))
+    if phone in hub.phones:
+        return {"ok": True, "sending": True}
+    if not wake_phone(phone):
+        raise HTTPException(400, "That iPhone is not connected any more. Open the Project R "
+                                 "app on it, then choose it again.")
+    return {"ok": True, "sending": False}
+
+
+@app.post("/api/password")
+async def set_password(request: Request):
+    """The operator password phones type to run the match. Changed on the PC
+    itself only."""
+    need_operator(request)
+    if client_host(request) not in LOOPBACK:
+        raise HTTPException(403, "Change the password on the PC itself.")
+    body = await request.json()
+    password = str(body.get("password", "")).strip()
+    if not 4 <= len(password) <= 64:
+        raise HTTPException(400, "The password needs 4 to 64 characters.")
+    save_operator_key(password)
+    hub.key = password
+    if hub.share:
+        hub.share["key"] = password
+    return {"ok": True}
+
+
 @app.post("/api/camera/preview")
-def camera_preview(request: Request, source: dict):
+async def camera_preview(request: Request, source: dict):
     """One picture from a camera, so the operator sees which device is
     which before deciding camera 1 and camera 2."""
     need_operator(request)
+    await phones_awake([source])          # an iPhone with the app: it starts filming first
+    return await asyncio.to_thread(preview_picture, source)
+
+
+def preview_picture(source):
     import cv2
 
     from live_engine import FrameSource
@@ -487,9 +604,15 @@ async def feed(socket_: WebSocket):
     client = Outbox()
     # A viewer (no operator key) or the broadcast page (?view=air) only gets
     # the camera on air; the operator gets all of them, side by side.
-    viewer = bool(hub.key) and not secrets.compare_digest(
-        socket_.query_params.get("key", ""), hub.key)
+    viewer = not is_operator(socket_.query_params.get("key", ""), client_host(socket_))
     hub.clients[client] = viewer or socket_.query_params.get("view") == "air"
+    # The iPhone app says who it is: the operator can then use its camera
+    # without anyone typing an address (it is asked to start it).
+    app_id = (socket_.query_params.get("app") or "")[:64]
+    if app_id:
+        hub.apps[app_id] = {"name": (socket_.query_params.get("name") or "iPhone").strip()[:40]
+                            or "iPhone", "client": client}
+        hub.publish({"type": "cameras"})
     try:
         if hub.match is not None:
             await socket_.send_text(json.dumps(hub.match.hello(), ensure_ascii=False))
@@ -503,6 +626,9 @@ async def feed(socket_: WebSocket):
         pass
     finally:
         hub.clients.pop(client, None)
+        if app_id and hub.apps.get(app_id, {}).get("client") is client:
+            hub.apps.pop(app_id, None)
+            hub.publish({"type": "cameras"})
 
 
 @app.websocket("/ws/camera")
@@ -510,16 +636,27 @@ async def camera_in(socket_: WebSocket):
     """A phone (or laptop) sending its camera: JPEG pictures in, one after
     another. It then shows in the camera lists as "Phone camera: name"."""
     await socket_.accept()
-    if hub.key and not secrets.compare_digest(socket_.query_params.get("key", ""), hub.key):
+    app_id = (socket_.query_params.get("app") or "")[:64]
+    token = socket_.query_params.get("token", "")
+    # The operator chose this iPhone as a camera: it was given a token for it.
+    asked = bool(app_id) and hub.camera_tokens.get(token) == app_id
+    if not asked and not is_operator(socket_.query_params.get("key", ""), client_host(socket_)):
         await socket_.close(code=4403, reason="operator key needed")
         return
     from live_engine import PushFeed
 
     wanted = (socket_.query_params.get("name") or "phone").strip()[:40] or "phone"
+    if app_id:                              # the same id whether it sends or waits to be asked
+        phone = f"app-{app_id}"
+        old = hub.phones.pop(phone, None)
+        if old is not None:
+            old.close()
+    else:
+        phone = secrets.token_hex(4)
     name, number = wanted, 2
     while any(feed.name == name for feed in hub.phones.values()):
         name, number = f"{wanted} {number}", number + 1
-    phone, feed = secrets.token_hex(4), PushFeed(name)
+    feed = PushFeed(name)
     hub.phones[phone] = feed
     hub.publish({"type": "cameras"})
     try:
@@ -535,7 +672,8 @@ async def camera_in(socket_: WebSocket):
         pass
     finally:
         feed.close()
-        hub.phones.pop(phone, None)
+        if hub.phones.get(phone) is feed:
+            hub.phones.pop(phone, None)
         hub.publish({"type": "cameras"})
 
 
@@ -545,11 +683,11 @@ def connect_info(request: Request):
     every address, and the pairing link (with the key for the operator)."""
     import pairing
 
-    operator = not hub.key or secrets.compare_digest(request.headers.get("x-key", ""), hub.key)
     addresses = pairing.lan_addresses()
     port = request.url.port or 8000
+    # The link only finds the PC: watching is open, operating needs the password.
     return {"name": pairing.pc_name(), "port": port, "addresses": addresses,
-            "link": pairing.pairing_link(addresses, port, hub.key if operator else ""),
+            "link": pairing.pairing_link(addresses, port),
             "phones": [feed.name for feed in hub.phones.values()]}
 
 
@@ -575,10 +713,22 @@ def lan_address():
         return "this-pc"
 
 
+KEY_FILE = project_cache.CACHE / "webapp-operator-key.txt"
+
+
+def save_operator_key(key):
+    try:
+        KEY_FILE.parent.mkdir(parents=True, exist_ok=True)
+        KEY_FILE.write_text(key, encoding="utf-8")
+    except OSError:
+        pass
+
+
 def operator_key():
-    """The same key every time the server starts, so a phone that was
-    given the operator address once keeps working. Kept in .cache."""
-    path = project_cache.CACHE / "webapp-operator-key.txt"
+    """The operator password, the same every time the server starts, so a
+    phone that was given it once keeps working. Kept in .cache; the PC can
+    change it (Connect a phone)."""
+    path = KEY_FILE
     try:
         key = path.read_text(encoding="utf-8").strip()
         if key:
@@ -717,20 +867,21 @@ def main():
         hub.share = {"address": f"{address}:{args.port}", "key": hub.key,
                      "url": f"{scheme}://{address}:{args.port}", "addresses": addresses,
                      "name": pairing.pc_name(),
-                     "link": pairing.pairing_link(addresses, args.port, hub.key)}
+                     "link": pairing.pairing_link(addresses, args.port)}
         if not args.https:
             announcer = pairing.Announcer(args.port)
             if not announcer.start():
                 print(f"Phones cannot find this PC by themselves: {announcer.error}")
-        print(f"\nOperator (you):      {scheme}://127.0.0.1:{args.port}/?key={hub.key}")
-        print(f"Operator on a phone: {scheme}://{address}:{args.port}/?key={hub.key}")
-        print(f"Viewers:             {scheme}://{address}:{args.port}")
+        print(f"\nOperator (you):      {scheme}://127.0.0.1:{args.port}")
+        print(f"Phones and viewers:  {scheme}://{address}:{args.port}")
+        print(f"Operator password:   {hub.key}   (phones type it to operate; "
+              "Connect a phone can change it)")
         print(f"Broadcast (OBS):     {scheme}://127.0.0.1:{args.port}/?view=air")
         if args.https:
             print("The iPhone app cannot use this https server (its certificate is home-made): "
                   "for the app, start without --https.\n")
         else:
-            print(f"In the iPhone app:   address {address}:{args.port}   key {hub.key}")
+            print(f"In the iPhone app:   address {address}:{args.port}")
             print(f"Pairing link (QR):   {hub.share['link']}\n")
     if args.exit_with:
         import threading
