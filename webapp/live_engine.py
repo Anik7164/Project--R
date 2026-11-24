@@ -90,6 +90,7 @@ DISPLAY_FPS = 20.0
 BOXES_KEEP_SECONDS = 0.6
 FIRST_PICTURE_SECONDS = 20.0   # a camera that opens but shows nothing by then has failed
 LOST_SECONDS = {"camera": 10.0, "url": 20.0, "phone": 45.0}   # ... and one that goes quiet
+QUIET_SECONDS = 3.0          # camera 2 or 3 without pictures this long: said, and off air
 
 # Why nothing is said (PictureWatch), as shown on the page.
 HOLD = {
@@ -334,6 +335,14 @@ class PushFeed:
     def close(self):
         with self.cond:
             self.closed = True
+            self.cond.notify_all()
+
+    def reopen(self, name=None):
+        """The same phone films again (it was closed or lost the Wi-Fi)."""
+        with self.cond:
+            self.closed = False
+            if name:
+                self.name = name
             self.cond.notify_all()
 
     def fresh(self, within=3.0):
@@ -1207,12 +1216,29 @@ class LiveMatch:
         name = source.describe()
         source.start()
         kind = bytes([PICTURE_KIND[number]])
+        quiet = False
         while not self.stopping.is_set():
             item = source.get()
             if item is None:
                 if source.ended:
                     break
+                # No pictures for a few seconds (a phone closed its camera):
+                # say so, and off air, instead of a frozen picture.
+                if (not quiet and source.live and source.last_wall is not None
+                        and time.monotonic() - source.last_wall > QUIET_SECONDS):
+                    quiet = True
+                    back = ""
+                    if self.on_air == number:
+                        self.on_air = 1
+                        back = " Camera 1 is on air."
+                    limit = LOST_SECONDS[spec["kind"]]
+                    self.note(f"Camera {number} ({name}) sends no pictures.{back} It comes back "
+                              f"by itself if it films again within {limit:.0f} s.")
+                    self.publish_json(self.stats())
                 continue
+            if quiet:
+                quiet = False
+                self.note(f"Camera {number} ({name}) is back.")
             frame = item[1]
             scale = min(1.0, OTHER_WIDTH / frame.shape[1])
             if scale < 1.0:

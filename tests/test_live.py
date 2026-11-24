@@ -527,6 +527,7 @@ def test_viewers_need_no_password_and_a_chosen_iphone_starts_filming(tmp_path, m
         monkeypatch.setattr(server.hub, "key", "secret")
         monkeypatch.setattr(server.hub, "apps", {})
         monkeypatch.setattr(server.hub, "camera_tokens", {})
+        monkeypatch.setattr(server.hub, "app_feeds", {})
         # Watching needs nothing; the page knows a password makes it the operator.
         state = client.get("/api/state").json()
         assert not state["operator"] and state["password"]
@@ -574,6 +575,8 @@ def test_viewers_need_no_password_and_a_chosen_iphone_starts_filming(tmp_path, m
                 starting.join(10)
                 assert answer["start"].status_code == 200
                 assert started[-1]["feed"].name == "Goal side"
+                # The same feed each time it films: a match using it goes on when it comes back.
+                assert started[-1]["feed"] is server.hub.app_feeds["abc"]
                 client.post("/api/stop", headers=op)
         # The app closed: gone from the list, and it cannot be started.
         assert all(c["id"] != "phone:app-abc"
@@ -706,6 +709,52 @@ def test_a_camera_that_stops_goes_off_air(tmp_path, monkeypatch):
     assert stats["on_air"] == 1 and stats["cameras"][1]["error"] == "unplugged"
     with pytest.raises(ValueError):
         match.put_on_air(2)
+
+
+def test_a_phone_camera_that_closes_goes_off_air_and_comes_back(monkeypatch):
+    import threading
+    import time
+
+    import cv2
+
+    monkeypatch.setattr(live_engine, "QUIET_SECONDS", 0.5)
+    feed = live_engine.PushFeed("Goal side")
+    match = live_engine.LiveMatch({"kind": "camera", "index": 0}, {}, lambda item: None,
+                                  lambda item: None,
+                                  others=[{"kind": "phone", "feed": feed, "id": "app-abc",
+                                           "label": "phone camera Goal side"}])
+    notes = []
+    monkeypatch.setattr(match, "note", notes.append)
+    ok, jpeg = cv2.imencode(".jpg", np.full((90, 160, 3), 120, dtype=np.uint8))
+    pushing = threading.Event()
+    pushing.set()
+
+    def phone():
+        while not match.stopping.is_set():
+            if pushing.is_set():
+                feed.push(jpeg.tobytes())
+            time.sleep(0.05)
+
+    threading.Thread(target=phone, daemon=True).start()
+    loop = threading.Thread(target=match._other_loop, args=(2, match.other_specs[0]), daemon=True)
+    loop.start()
+    time.sleep(0.6)
+    match.put_on_air(2)
+    pushing.clear()
+    feed.close()                       # the iPhone closed its camera
+    deadline = time.monotonic() + 5
+    while not notes and time.monotonic() < deadline:
+        time.sleep(0.05)
+    assert notes and "sends no pictures" in notes[0] and match.on_air == 1
+    feed.reopen()                      # ... and films again: the same feed
+    pushing.set()
+    deadline = time.monotonic() + 5
+    while len(notes) < 2 and time.monotonic() < deadline:
+        time.sleep(0.05)
+    assert "is back" in notes[-1]
+    match.put_on_air(2)
+    match.stopping.set()
+    loop.join(3)
 
 
 def test_https_certificate_is_made_once_for_this_pc(tmp_path):

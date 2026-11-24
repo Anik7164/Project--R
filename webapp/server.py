@@ -125,6 +125,8 @@ class Hub:
         self.phones = {}   # id -> PushFeed: devices sending their camera in
         self.apps = {}     # app id -> {"name", "client"}: iPhones with the Project R app open
         self.camera_tokens = {}      # token -> app id: handed to an app asked to start its camera
+        self.app_feeds = {}          # app id -> its PushFeed, kept when it stops so a match
+                                     # using it goes on when the phone films again
         self.share = None  # {"address", "key"}: what a phone on the Wi-Fi types to join
         self.warm = False  # load the models when the server starts (main() sets it)
 
@@ -646,17 +648,22 @@ async def camera_in(socket_: WebSocket):
     from live_engine import PushFeed
 
     wanted = (socket_.query_params.get("name") or "phone").strip()[:40] or "phone"
-    if app_id:                              # the same id whether it sends or waits to be asked
-        phone = f"app-{app_id}"
-        old = hub.phones.pop(phone, None)
-        if old is not None:
-            old.close()
-    else:
-        phone = secrets.token_hex(4)
+    # The same id whether it sends or waits to be asked, and the same feed
+    # each time it films: a match that uses it picks it up again.
+    phone = f"app-{app_id}" if app_id else secrets.token_hex(4)
+    hub.phones.pop(phone, None)
     name, number = wanted, 2
     while any(feed.name == name for feed in hub.phones.values()):
         name, number = f"{wanted} {number}", number + 1
-    feed = PushFeed(name)
+    feed = hub.app_feeds.get(app_id) if app_id else None
+    if feed is None:
+        feed = PushFeed(name)
+        if app_id:
+            hub.app_feeds[app_id] = feed
+    else:
+        feed.reopen(name)
+    mine = object()
+    feed.owner = mine
     hub.phones[phone] = feed
     hub.publish({"type": "cameras"})
     try:
@@ -671,9 +678,10 @@ async def camera_in(socket_: WebSocket):
     except (WebSocketDisconnect, RuntimeError):
         pass
     finally:
-        feed.close()
-        if hub.phones.get(phone) is feed:
-            hub.phones.pop(phone, None)
+        if feed.owner is mine:              # not taken over by a newer connection
+            feed.close()
+            if hub.phones.get(phone) is feed:
+                hub.phones.pop(phone, None)
         hub.publish({"type": "cameras"})
 
 
