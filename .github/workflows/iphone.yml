@@ -1,0 +1,53 @@
+# The native iPhone app (iphone/), built on a GitHub Mac, unsigned.
+# Download "ProjectR-iPhone-ipa" from the run and install it with Sideloadly
+# (iphone/README.md). Run it by hand: Actions > iPhone app (native) > Run workflow.
+name: iPhone app (native)
+
+on:
+  workflow_dispatch:
+  push:
+    paths: ["iphone/**", ".github/workflows/iphone.yml"]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: iphone-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: macos-15
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - run: brew install xcodegen
+      - name: Make the Xcode project
+        working-directory: iphone
+        run: xcodegen generate
+      - name: Build (unsigned)
+        working-directory: iphone
+        run: |
+          set -o pipefail
+          xcodebuild -project ProjectR.xcodeproj -scheme ProjectR -configuration Release \
+            -sdk iphoneos -destination 'generic/platform=iOS' -derivedDataPath build \
+            CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO CODE_SIGN_IDENTITY="" \
+            build 2>&1 | tee xcodebuild.log | grep -E "error:|warning: .*(deprecated|isolated)|BUILD" || true
+          test -d build/Build/Products/Release-iphoneos/ProjectR.app
+      - name: Package the .ipa
+        working-directory: iphone
+        run: |
+          mkdir -p Payload
+          cp -R build/Build/Products/Release-iphoneos/ProjectR.app Payload/
+          zip -qry ProjectR-unsigned.ipa Payload
+          ls -lh ProjectR-unsigned.ipa
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ProjectR-iPhone-ipa
+          path: iphone/ProjectR-unsigned.ipa
+          retention-days: 30
+      - uses: actions/upload-artifact@v4
+        if: failure()
+        with:
+          name: xcodebuild-log
+          path: iphone/xcodebuild.log

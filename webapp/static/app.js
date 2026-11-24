@@ -1010,7 +1010,9 @@ async function boot() {
       $("share").hidden = false;
       $("share").textContent = `Phones and other PCs on this Wi-Fi: viewers open ${state.share.url} · ` +
         `the iPhone app and the operator use address ${state.share.address} with key ${state.share.key}`;
-      showShareQr(`${state.share.url}/?key=${encodeURIComponent(state.share.key)}`);
+      // The pairing link (projectr://…) opens the iPhone app; an older server: the page.
+      showShareQr(state.share.link || `${state.share.url}/?key=${encodeURIComponent(state.share.key)}`);
+      $("phoneSafari").textContent = `${state.share.url}/?key=${state.share.key}`;
     } else if (operator && !IN_APP && !BROADCAST) {
       // Not shared on the Wi-Fi: the button says how to share instead of a code.
       $("shareQrCode").hidden = true;

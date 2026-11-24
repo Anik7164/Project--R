@@ -539,6 +539,20 @@ async def camera_in(socket_: WebSocket):
         hub.publish({"type": "cameras"})
 
 
+@app.get("/connect/info")
+def connect_info(request: Request):
+    """What a phone needs to join (the iPhone app): this PC's name, port,
+    every address, and the pairing link (with the key for the operator)."""
+    import pairing
+
+    operator = not hub.key or secrets.compare_digest(request.headers.get("x-key", ""), hub.key)
+    addresses = pairing.lan_addresses()
+    port = request.url.port or 8000
+    return {"name": pairing.pc_name(), "port": port, "addresses": addresses,
+            "link": pairing.pairing_link(addresses, port, hub.key if operator else ""),
+            "phones": [feed.name for feed in hub.phones.values()]}
+
+
 @app.get("/")
 def page():
     return FileResponse(STATIC / "index.html", headers={"Cache-Control": "no-store"})
@@ -695,9 +709,19 @@ def main():
         print(f"Broadcast (OBS browser source, the camera on air only): "
               f"{scheme}://127.0.0.1:{args.port}/?view=air\n")
     else:
+        import pairing
+
         hub.key = operator_key()
+        addresses = pairing.lan_addresses() or [address]
+        address = addresses[0]
         hub.share = {"address": f"{address}:{args.port}", "key": hub.key,
-                     "url": f"{scheme}://{address}:{args.port}"}
+                     "url": f"{scheme}://{address}:{args.port}", "addresses": addresses,
+                     "name": pairing.pc_name(),
+                     "link": pairing.pairing_link(addresses, args.port, hub.key)}
+        if not args.https:
+            announcer = pairing.Announcer(args.port)
+            if not announcer.start():
+                print(f"Phones cannot find this PC by themselves: {announcer.error}")
         print(f"\nOperator (you):      {scheme}://127.0.0.1:{args.port}/?key={hub.key}")
         print(f"Operator on a phone: {scheme}://{address}:{args.port}/?key={hub.key}")
         print(f"Viewers:             {scheme}://{address}:{args.port}")
@@ -706,7 +730,8 @@ def main():
             print("The iPhone app cannot use this https server (its certificate is home-made): "
                   "for the app, start without --https.\n")
         else:
-            print(f"In the iPhone app:   address {address}:{args.port}   key {hub.key}\n")
+            print(f"In the iPhone app:   address {address}:{args.port}   key {hub.key}")
+            print(f"Pairing link (QR):   {hub.share['link']}\n")
     if args.exit_with:
         import threading
 

@@ -1,0 +1,44 @@
+# The iPhone app, described for XcodeGen (no .xcodeproj in git).
+# GitHub makes the project and builds it: .github/workflows/iphone.yml
+#   brew install xcodegen && xcodegen generate     (on a Mac, in iphone/)
+name: ProjectR
+options:
+  bundleIdPrefix: com.projectr
+  deploymentTarget: { iOS: "16.0" }
+  createIntermediateGroups: true
+settings:
+  base: { SWIFT_VERSION: "5.9", MARKETING_VERSION: "2.0", CURRENT_PROJECT_VERSION: "1" }
+targets:
+  ProjectR:
+    type: application
+    platform: iOS
+    sources: [ { path: ProjectR } ]
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.projectr.livecommentary
+        PRODUCT_NAME: ProjectR
+        TARGETED_DEVICE_FAMILY: "1"
+        INFOPLIST_FILE: ProjectR/Info.plist
+        GENERATE_INFOPLIST_FILE: NO
+        ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
+    info:
+      path: ProjectR/Info.plist
+      properties:
+        CFBundleDisplayName: Project R
+        CFBundleShortVersionString: $(MARKETING_VERSION)
+        CFBundleVersion: $(CURRENT_PROJECT_VERSION)
+        UILaunchScreen: {}
+        UIUserInterfaceStyle: Dark
+        UIApplicationSceneManifest: { UIApplicationSupportsMultipleScenes: false }
+        UISupportedInterfaceOrientations:
+          [UIInterfaceOrientationPortrait, UIInterfaceOrientationLandscapeLeft, UIInterfaceOrientationLandscapeRight]
+        NSCameraUsageDescription: Project R scans the QR code on your PC and can send this camera's picture to the PC, which turns the match into live commentary.
+        NSLocalNetworkUsageDescription: Project R connects to the PC on your Wi-Fi that runs the live commentary.
+        NSBonjourServices: ["_projectr._tcp"]
+        CFBundleURLTypes:
+          - { CFBundleURLName: com.projectr.connect, CFBundleURLSchemes: [projectr] }
+        NSAppTransportSecurity: { NSAllowsArbitraryLoads: true, NSAllowsLocalNetworking: true }
+schemes:
+  ProjectR:
+    build: { targets: { ProjectR: all } }
+    archive: { config: Release }

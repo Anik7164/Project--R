@@ -1,0 +1,5 @@
+ProjectR.xcodeproj/
+build/
+Payload/
+*.ipa
+xcodebuild.log

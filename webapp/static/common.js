@@ -7,7 +7,8 @@
 const SHELL = Boolean(window.PROJECT_R_SHELL) ||
   ["capacitor:", "ionic:", "file:"].includes(location.protocol);
 // The PC's own page, opened inside the iPhone app (not in Safari).
-const IN_APP = SHELL || Boolean(window.Capacitor?.isNativePlatform?.());
+const IN_APP = SHELL || Boolean(window.PROJECT_R_NATIVE) ||
+  Boolean(window.Capacitor?.isNativePlatform?.());
 // iOS does not let the app's own pages (capacitor://) reach a PC over plain
 // http (mixed content), so the app only asks which PC and then opens the
 // PC's page itself, just as Safari does. When that page cannot be loaded
@@ -250,7 +251,11 @@ function showServer(element) {
   if (IN_APP && !SHELL && element) {        // the PC's page inside the iPhone app
     element.hidden = false;
     element.textContent = `PC ${location.host} · change`;
-    element.onclick = () => { location.href = "capacitor://localhost/?change=1"; };
+    element.onclick = () => {
+      // The native app (iphone/) listens for this; the older Capacitor app has its own page.
+      if (window.PROJECT_R_NATIVE) window.webkit?.messageHandlers?.projectr?.postMessage("change");
+      else location.href = "capacitor://localhost/?change=1";
+    };
     return;
   }
   if (!SHELL || !element) return;

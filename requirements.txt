@@ -56,6 +56,7 @@ python-multipart          # video upload from the page
 cryptography              # --https (a phone's browser as a camera)
 pywebview>=5.0            # the desktop app window (WebView2 on Windows)
 psutil                    # the server stops when the app window is gone
+zeroconf                  # the iPhone app finds the PC on the Wi-Fi by itself (Bonjour)
 
 # --- Data and benchmarks
 SoccerNet==0.2.0          # SoccerNet downloader + spotting evaluation
