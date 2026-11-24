@@ -141,7 +141,7 @@ struct CameraScreen: View {
                 ZStack(alignment: .topLeading) {
                     CameraPreview(session: sender.session)
                     if sender.running {
-                        Text("LIVE · \(sender.rate) pictures/s")
+                        Text("LIVE · \(sender.rate) pictures/s · \(sender.size)")
                             .font(.caption.bold())
                             .padding(.horizontal, 8)
                             .padding(.vertical, 4)

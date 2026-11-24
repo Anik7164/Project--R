@@ -909,6 +909,24 @@ def test_a_phone_camera_that_closes_goes_off_air_and_comes_back(monkeypatch):
     loop.join(3)
 
 
+def test_no_picture_reaches_a_page_after_stop():
+    import asyncio
+
+    import server
+
+    async def check():
+        hub = server.Hub()
+        client = server.Outbox()
+        hub.clients[client] = False
+        hub._deliver(b"\x01" + b"\0" * 8 + b"jpeg")
+        assert client.qsize() == 1
+        hub._deliver({"type": "stats", "state": "ended", "cut": True})
+        assert not client.pictures and client.qsize() == 1     # the stats only
+        assert (await client.get())["cut"]
+
+    asyncio.run(check())
+
+
 def test_https_certificate_is_made_once_for_this_pc(tmp_path):
     pytest.importorskip("cryptography")
     import ssl

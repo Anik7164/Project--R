@@ -92,6 +92,8 @@ let cameraCount = 1;
 let onAir = 1;
 
 function onPicture(t, blob, camera = 1) {
+  // A picture that comes after Stop would stay frozen on the page.
+  if (stats && stats.cut && !["running", "starting"].includes(stats.state)) return;
   if (camera === 1) {
     newest = t;
     retime(t);

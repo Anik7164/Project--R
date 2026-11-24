@@ -1221,6 +1221,8 @@ class LiveMatch:
             if item is None or item is seen:
                 continue
             seen = item
+            if self.cut:
+                break                           # Stop: no picture after it
             at, frame = item
             boxes_at, rows, ball = self.overlay
             if boxes_at is None or abs(at - boxes_at) > BOXES_KEEP_SECONDS:

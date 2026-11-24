@@ -12,19 +12,24 @@ import UIKit
 /// the operator password. Either way it goes with this phone's id, so the
 /// PC keeps one entry for it.
 ///
-/// No video stream: a picture is packed when one is due (FRAME_GAP) and only
-/// while fewer than 2 are still on their way, so slow Wi-Fi never builds lag.
+/// No video stream: a picture is packed when one is due (about 24 a second;
+/// the PC shows up to 20 and analyses 12) and only while fewer than 3 are
+/// still on their way, so slow Wi-Fi never builds lag. When the Wi-Fi cannot
+/// carry that many, the pictures get smaller (1280 › 960 › 720 on the long
+/// side) rather than fewer, and sharper again once it can.
 final class CameraSender: NSObject, ObservableObject, AVCaptureVideoDataOutputSampleBufferDelegate,
                           URLSessionWebSocketDelegate {
     @Published private(set) var status = "Camera off"
     @Published private(set) var running = false
     @Published private(set) var rate = 0
+    @Published private(set) var size = 1280
 
     let session = AVCaptureSession()
 
-    static let frameGap: CFTimeInterval = 1.0 / 15      // the PC analyses up to 12 a second
-    static let longSide: CGFloat = 1280
-    static let quality: CGFloat = 0.7
+    static let frameGap: CFTimeInterval = 1.0 / 24
+    static let maxInFlight = 3
+    /// Picture sizes, sharpest first (long side, JPEG quality).
+    static let levels: [(longSide: CGFloat, quality: CGFloat)] = [(1280, 0.6), (960, 0.55), (720, 0.5)]
 
     // Main queue:
     private var urlSession: URLSession?
@@ -40,7 +45,10 @@ final class CameraSender: NSObject, ObservableObject, AVCaptureVideoDataOutputSa
     private var sending: URLSessionWebSocketTask?
     private var open = false
     private var inFlight = 0
-    private var lastSent: CFTimeInterval = 0
+    private var nextDue: CFTimeInterval = 0
+    private var level = 0
+    private var slowReadings = 0
+    private var fastReadings = 0
     private var counted = 0
     private var countedAt: CFTimeInterval = 0
     private var orientation: CGImagePropertyOrientation = .up
@@ -129,21 +137,23 @@ final class CameraSender: NSObject, ObservableObject, AVCaptureVideoDataOutputSa
 
     func captureOutput(_ output: AVCaptureOutput, didOutput sampleBuffer: CMSampleBuffer,
                        from connection: AVCaptureConnection) {
-        guard open, let task = sending, inFlight < 2 else { return }
+        guard open, let task = sending, inFlight < CameraSender.maxInFlight else { return }
         let now = CACurrentMediaTime()
-        guard now - lastSent >= CameraSender.frameGap,
-              let pixels = CMSampleBufferGetImageBuffer(sampleBuffer) else { return }
-        lastSent = now
+        // Paced by when the next one is due, not by the last one sent: the
+        // camera gives 30 a second, and "33 ms since the last" would halve that.
+        guard now >= nextDue, let pixels = CMSampleBufferGetImageBuffer(sampleBuffer) else { return }
+        nextDue = max(nextDue + CameraSender.frameGap, now - CameraSender.frameGap)
+        let (longSide, compression) = CameraSender.levels[level]
         var image = CIImage(cvPixelBuffer: pixels).oriented(orientation)
         let long = max(image.extent.width, image.extent.height)
-        if long > CameraSender.longSide {
-            let scale = CameraSender.longSide / long
+        if long > longSide {
+            let scale = longSide / long
             image = image.transformed(by: CGAffineTransform(scaleX: scale, y: scale))
         }
         let quality = CIImageRepresentationOption(rawValue: kCGImageDestinationLossyCompressionQuality as String)
         guard let space = CGColorSpace(name: CGColorSpace.sRGB),
               let jpeg = context.jpegRepresentation(of: image, colorSpace: space,
-                                                    options: [quality: CameraSender.quality]) else { return }
+                                                    options: [quality: compression]) else { return }
         inFlight += 1
         task.send(.data(jpeg)) { [weak self] error in
             guard let self else { return }
@@ -156,9 +166,37 @@ final class CameraSender: NSObject, ObservableObject, AVCaptureVideoDataOutputSa
                     let rate = Int((Double(self.counted) / (now - self.countedAt)).rounded())
                     self.counted = 0
                     self.countedAt = now
-                    Task { @MainActor in self.rate = rate }
+                    self.adapt(rate)
+                    let size = Int(CameraSender.levels[self.level].longSide)
+                    Task { @MainActor in
+                        self.rate = rate
+                        self.size = size
+                    }
                 }
             }
+        }
+    }
+
+    /// Camera queue: smaller pictures when the Wi-Fi carries fewer than 16 a
+    /// second (twice running), sharper again after 30 s of 21 or more.
+    private func adapt(_ rate: Int) {
+        if rate < 16 {
+            slowReadings += 1
+            fastReadings = 0
+            if slowReadings >= 2 && level < CameraSender.levels.count - 1 {
+                level += 1
+                slowReadings = 0
+            }
+        } else if rate >= 21 {
+            fastReadings += 1
+            slowReadings = 0
+            if fastReadings >= 15 && level > 0 {
+                level -= 1
+                fastReadings = 0
+            }
+        } else {
+            slowReadings = 0
+            fastReadings = 0
         }
     }
 
@@ -213,6 +251,9 @@ final class CameraSender: NSObject, ObservableObject, AVCaptureVideoDataOutputSa
             self.sending = task
             self.open = false
             self.inFlight = 0
+            self.nextDue = 0
+            self.counted = 0
+            self.countedAt = 0
         }
         task.resume()
         listen(task, mine)

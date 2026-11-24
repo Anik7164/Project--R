@@ -135,8 +135,14 @@ class Hub:
     def _deliver(self, item):
         from live_engine import CAMERA_OF_KIND
 
-        if isinstance(item, dict) and item.get("state") in ("ended", "failed") and self.taken:
-            release_phones(keep_selected=False)
+        if isinstance(item, dict) and item.get("state") in ("ended", "failed"):
+            if item.get("cut"):
+                # Stopped: pictures still waiting for a browser are dropped, so
+                # none arrives after the stop and stays frozen on the page.
+                for client in list(self.clients):
+                    client.pictures.clear()
+            if self.taken:
+                release_phones(keep_selected=False)
 
         camera = CAMERA_OF_KIND.get(item[0]) if isinstance(item, bytes) else None
         on_air = getattr(self.match, "on_air", 1)
