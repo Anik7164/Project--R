@@ -539,7 +539,14 @@ function connect() {
   const query = new URLSearchParams();
   if (key) query.set("key", key);
   if (BROADCAST) query.set("view", "air");
-  const socket = new WebSocket(socketUrl(`/ws${query.toString() ? `?${query}` : ""}`));
+  let socket;
+  try {
+    socket = new WebSocket(socketUrl(`/ws${query.toString() ? `?${query}` : ""}`));
+  } catch (error) {                 // e.g. iOS refusing ws:// from the app's own pages
+    $("statusText").textContent = `Cannot connect to the PC (${error.name || error}). ` +
+      "Open the PC's address in Safari, or update the app.";
+    return;
+  }
   socket.binaryType = "arraybuffer";
   socket.onmessage = (event) => {
     if (typeof event.data !== "string") {
