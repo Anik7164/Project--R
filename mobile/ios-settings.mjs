@@ -40,6 +40,36 @@ for (const [name, value] of Object.entries(wanted)) {
 }
 writeFileSync(plistPath, plist);
 
+// iOS lists an app under Settings > Privacy > Local Network (and asks the
+// person) only after the app itself, not its web view, tries the local
+// network. Without that the web view cannot open the PC's page. So at start
+// the app knocks once at a private address; iOS then asks "find devices on
+// your local network?". Nothing is sent anywhere that matters.
+const delegatePath = join(app, "AppDelegate.swift");
+let delegate = readFileSync(delegatePath, "utf8");
+if (!delegate.includes("askForLocalNetwork")) {
+  delegate = delegate.replace("import Capacitor\n", "import Capacitor\nimport Network\n");
+  delegate = delegate.replace(
+    "        // Override point for customization after application launch.\n",
+    "        // Override point for customization after application launch.\n" +
+    "        askForLocalNetwork()\n");
+  delegate = delegate.replace(/\n}\s*$/, `
+
+    private var knock: NWConnection?
+
+    private func askForLocalNetwork() {
+        let connection = NWConnection(host: "192.168.1.1", port: 9, using: .udp)
+        knock = connection
+        connection.start(queue: .main)
+        connection.send(content: Data([0]), completion: .contentProcessed { _ in
+            DispatchQueue.main.asyncAfter(deadline: .now() + 2) { connection.cancel() }
+        })
+    }
+}
+`);
+  writeFileSync(delegatePath, delegate);
+}
+
 const assets = join(app, "Assets.xcassets");
 copyFileSync(join(here, "assets", "icon.png"), join(assets, "AppIcon.appiconset", "AppIcon-512@2x.png"));
 const splash = join(assets, "Splash.imageset");
