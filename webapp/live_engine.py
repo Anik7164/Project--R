@@ -92,6 +92,7 @@ FIRST_PICTURE_SECONDS = 20.0   # a camera that opens but shows nothing by then h
 LOST_SECONDS = {"camera": 10.0, "url": 20.0, "phone": 120.0}  # ... and one that goes quiet
 # (a phone: long enough for its app to come back after the screen locked or the Wi-Fi dropped)
 QUIET_SECONDS = 3.0          # camera 2 or 3 without pictures this long: said, and off air
+BAD_PICTURES_IN_A_ROW = 25   # a live camera 1 stops the match only when this many fail in a row
 
 # Why nothing is said (PictureWatch), as shown on the page.
 HOLD = {
@@ -883,7 +884,7 @@ class LiveMatch:
         self.display_item = None
         self.display_live = False
         self.shown_at = 0.0
-        self.overlay = (None, [], None)   # (seconds, rows, ball) of the newest analysed frame
+        self.overlay = (None, [], None, None)   # (seconds, rows, ball, size) of the newest analysed frame
         self.clock = 0.0              # seconds of match seen so far
         self.started_wall = time.time()
 
@@ -981,6 +982,7 @@ class LiveMatch:
 
             last_stats, done_at = time.monotonic(), deque(maxlen=40)
             speed_check_at = time.monotonic() + 8.0
+            failed_in_a_row = 0
             while not self.stopping.is_set():
                 source = self.source          # the operator may switch camera 1
                 item = source.get()
@@ -997,7 +999,24 @@ class LiveMatch:
                         last_stats = time.monotonic()
                         self.publish_json(self.stats())
                     continue
-                self._process(*item)
+                try:
+                    self._process(*item)
+                    failed_in_a_row = 0
+                except Exception as error:
+                    # One picture that cannot be analysed does not end a live
+                    # match; a camera whose every picture fails does.
+                    failed_in_a_row += 1
+                    if not source.live or failed_in_a_row >= BAD_PICTURES_IN_A_ROW:
+                        raise
+                    traceback.print_exc()
+                    text = f"A picture could not be analysed, the match goes on ({error})."
+                    if text not in self.notes:
+                        self.note(text)
+                    try:
+                        self._start_tracks_over()
+                    except Exception:
+                        traceback.print_exc()
+                    continue
                 if self.state == "starting":
                     self._status(f"Live: {name}", "running")
                 done_at.append(time.monotonic())
@@ -1097,6 +1116,8 @@ class LiveMatch:
         self.people_classes_fn = people_classes
         self.people_paths = (path, coco_path, is_football_model)
         self.fresh_camera = False     # camera 1 changed: the people model starts over
+        self.frame_shape = None       # (height, width) of the last picture looked at
+        self.id_base = self.top_id = 0    # the tracker's IDs go on from top_id when it starts over
         reid = warm["reid"] if self.settings["reid"] else None
         self.stable = StablePlayerTracker(reid=reid)
         self.stable.camera = _CameraRecorder(self.stable.camera)
@@ -1150,6 +1171,7 @@ class LiveMatch:
         if self.probe["ours"] < 0.4 * self.probe["theirs"]:
             self.people_model = self.coco
             self.people_classes = self.people_classes_fn(self.coco)
+            self.id_base = self.top_id    # its tracker counts from 1 again
             self.note("The football detector finds too few players on this camera: "
                       "using the general model for people (the ball still comes from the football model).")
         self.probe = self.coco = None
@@ -1173,12 +1195,30 @@ class LiveMatch:
         self.people_model = main
         self.people_classes = self.people_classes_fn(main)
 
+    def _start_tracks_over(self):
+        """The picture is not the one before (another camera 1, or the
+        phone turned and its picture changed size): the tracker and the
+        camera-motion follower forget the old picture (comparing it with
+        the new one would fail), the identity layer starts a new shot, and
+        the ball is looked for afresh. The tracker's IDs go on from the
+        highest so far, so no old ID is given to a new player."""
+        predictor = getattr(self.people_model, "predictor", None)
+        for tracker in getattr(predictor, "trackers", None) or []:
+            tracker.reset()
+        self.id_base = self.top_id
+        self.stable.camera.reset()
+        self.selector, self.last_ball = None, None
+
     def _process(self, at, frame):
         index = max(self.last_frame + 1, int(round(at * self.fps)))
         self.last_frame = index
         height, width = frame.shape[:2]
         if self.fresh_camera:
             self._restart_people_model()
+            self._start_tracks_over()
+        elif self.frame_shape is not None and frame.shape[:2] != self.frame_shape:
+            self._start_tracks_over()     # the phone was turned: a tall picture became wide, or back
+        self.frame_shape = frame.shape[:2]
         if self.probe is not None:
             self._probe_people_model(frame)
 
@@ -1199,7 +1239,9 @@ class LiveMatch:
                 y1, y2 = max(0, min(y1, height - 1)), max(0, min(y2, height - 1))
                 if x2 <= x1 or y2 <= y1:
                     continue
-                detections.append((int(tracker_id), (x1, y1, x2, y2), float(confidence),
+                tracker_id = int(tracker_id) + self.id_base
+                self.top_id = max(self.top_id, tracker_id)
+                detections.append((tracker_id, (x1, y1, x2, y2), float(confidence),
                                    self.people_model.names[int(class_id)]))
 
         keep, assignments, resolved = self.stable.process(
@@ -1234,7 +1276,7 @@ class LiveMatch:
         self.frames_done += 1
         self.clock = at
         if self.display_live:
-            self.overlay = (at, rows, ball)   # drawn on the pictures shown next
+            self.overlay = (at, rows, ball, frame.shape[:2])   # drawn on the pictures shown next
         else:
             self._send_picture(at, frame, rows, ball)
 
@@ -1262,8 +1304,9 @@ class LiveMatch:
             if self.cut:
                 break                           # Stop: no picture after it
             at, frame = item
-            boxes_at, rows, ball = self.overlay
-            if boxes_at is None or abs(at - boxes_at) > BOXES_KEEP_SECONDS:
+            boxes_at, rows, ball, size = self.overlay
+            # (Boxes from a tall picture do not fit a wide one: the phone was turned.)
+            if boxes_at is None or abs(at - boxes_at) > BOXES_KEEP_SECONDS or size != frame.shape[:2]:
                 rows, ball = [], None
             self.shown_at = at
             try:

@@ -70,6 +70,24 @@ def test_camera_motion_recovers_pan():
     assert abs(moved[0] - 488) < 1.5 and abs(moved[1] - 300) < 1.5
 
 
+def test_a_picture_that_changes_size_is_a_new_shot():
+    # A phone turned from upright to sideways: its pictures go from tall to
+    # wide. Not an error; a new shot, and the camera is followed again after.
+    rng = np.random.default_rng(3)
+    world = rng.integers(0, 255, (1400, 1400, 3), dtype=np.uint8)
+    world = np.ascontiguousarray(np.repeat(np.repeat(world[::8, ::8], 8, 0), 8, 1))
+    estimator = CameraMotionEstimator()
+    for _ in range(3):
+        _, cut = estimator.update(world[:1280, :720])
+    assert not cut
+    _, cut = estimator.update(world[:720, :1280])
+    assert cut
+    warp, cut = estimator.update(world[:720, 12:1292])
+    assert not cut
+    moved = warp_points([[500, 300]], warp)[0]
+    assert abs(moved[0] - 488) < 1.5 and abs(moved[1] - 300) < 1.5
+
+
 def test_scene_cut_detected():
     rng = np.random.default_rng(2)
     estimator = CameraMotionEstimator()

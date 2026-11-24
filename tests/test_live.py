@@ -1053,3 +1053,97 @@ def test_a_slow_browser_gets_the_newest_picture_not_a_backlog():
     pictures = [item for item in sent if isinstance(item, bytes) and item[0] in (1, 3)]
     assert len(pictures) == 2 and struct.unpack("<d", pictures[0][1:9])[0] == 9.0
     assert {"type": "line"} in sent and any(isinstance(i, bytes) and i[0] == 2 for i in sent)
+
+
+def test_a_phone_turned_sideways_starts_the_tracks_over_and_ids_go_on(monkeypatch):
+    # The phone's picture goes from tall to wide: the tracker and the camera
+    # follower forget the tall picture, and no old player ID comes back.
+    from collections import defaultdict, deque
+    from types import SimpleNamespace
+
+    import torch
+
+    match, _ = _match()
+    resets = []
+
+    class Tracker:
+        def reset(self):
+            resets.append("tracker")
+
+    class People:
+        names = {0: "person"}
+        predictor = SimpleNamespace(trackers=[Tracker()])
+
+        def track(self, source, **_):
+            boxes = SimpleNamespace(
+                xyxy=torch.tensor([[10.0, 10.0, 40.0, 90.0], [100.0, 10.0, 130.0, 90.0]]),
+                id=torch.tensor([1, 2]), conf=torch.tensor([0.9, 0.9]), cls=torch.tensor([0, 0]))
+            return [SimpleNamespace(boxes=boxes)]
+
+    seen = []
+
+    def process(index, frame, tracker_ids, boxes, confidences):
+        seen.append(list(tracker_ids))
+        return list(range(len(boxes))), [None] * len(boxes), {}
+
+    match.people_model, match.people_classes, match.probe = People(), [0], None
+    match.tp = SimpleNamespace(CONFIDENCE=0.3, NMS_IOU=0.5, validate_box=lambda *a: (True,))
+    match.stable = SimpleNamespace(process=process, camera=SimpleNamespace(
+        last=(None, False), reset=lambda: resets.append("camera")))
+    match.overlaps_other = lambda *a: True
+    match.fresh_camera, match.frame_shape, match.id_base, match.top_id = False, None, 0, 0
+    match.selector = match.last_ball = None
+    match.held, match.pending_rows, match.delay = deque(), defaultdict(list), 1000
+    match.sample_step, match.display_live, match.last_frame, match.device = 1, False, -1, "cpu"
+    monkeypatch.setattr(match, "_find_ball", lambda *a: None)
+    monkeypatch.setattr(match, "_send_picture", lambda *a: None)
+
+    tall, wide = np.zeros((1280, 720, 3), np.uint8), np.zeros((720, 1280, 3), np.uint8)
+    for at, picture in enumerate([tall, tall, wide, wide, tall]):
+        match._process(at / 12, picture)
+    assert resets == ["tracker", "camera"] * 2       # turned twice
+    assert seen == [[1, 2], [1, 2], [3, 4], [3, 4], [5, 6]]
+
+
+def test_a_picture_that_cannot_be_analysed_does_not_stop_a_live_match(monkeypatch):
+    import threading
+    import time
+
+    import cv2
+
+    from live_engine import PushFeed
+
+    feed = PushFeed("pitch side")
+    messages = []
+    match = LiveMatch({"kind": "phone", "feed": feed}, {"voice": "off"},
+                      messages.append, lambda data: None)
+    shapes = []
+
+    def process(at, frame):
+        shapes.append(frame.shape[:2])
+        if len(shapes) == 3 or len(shapes) >= 6:
+            raise ValueError("bad picture")
+        match.frames_done += 1
+
+    monkeypatch.setattr(match, "_load_models", lambda: None)
+    monkeypatch.setattr(match, "_process", process)
+    monkeypatch.setattr(match, "_start_tracks_over", lambda: None)
+    monkeypatch.setattr(live_engine, "BAD_PICTURES_IN_A_ROW", 4)
+    match.start()
+
+    def push_until(count):
+        deadline = time.monotonic() + 10
+        while len(shapes) < count and time.monotonic() < deadline:
+            ok, jpeg = cv2.imencode(".jpg", np.full((90, 160, 3), 120, dtype=np.uint8))
+            feed.push(jpeg.tobytes())
+            threading.Event().wait(0.1)
+
+    push_until(5)
+    assert match.state == "running" and match.frames_done == 4
+    assert any(m.get("type") == "note" and "could not be analysed" in m["text"] for m in messages)
+    push_until(9)                     # every picture fails: that does stop it
+    deadline = time.monotonic() + 5
+    while match.state == "running" and time.monotonic() < deadline:
+        time.sleep(0.05)
+    assert match.state == "failed" and "bad picture" in match.message
+    match.stop()

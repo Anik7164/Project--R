@@ -145,6 +145,13 @@ class CameraMotionEstimator:
 
         if prev_gray is None:
             return IDENTITY.copy(), True
+        if prev_gray.shape != gray.shape:
+            # The picture changed size (a phone turned from tall to wide):
+            # nothing to follow from the last frame, a new shot.
+            self.jumps.clear()
+            self.hists.clear()
+            self.hists.append(hist)
+            return IDENTITY.copy(), True
 
         correlation = cv2.compareHist(prev_hist, hist, cv2.HISTCMP_CORREL)
         dissolved = (
