@@ -89,7 +89,8 @@ CAMERA_OF_KIND = {kind: number for number, kind in PICTURE_KIND.items()}
 DISPLAY_FPS = 20.0
 BOXES_KEEP_SECONDS = 0.6
 FIRST_PICTURE_SECONDS = 20.0   # a camera that opens but shows nothing by then has failed
-LOST_SECONDS = {"camera": 10.0, "url": 20.0, "phone": 45.0}   # ... and one that goes quiet
+LOST_SECONDS = {"camera": 10.0, "url": 20.0, "phone": 120.0}  # ... and one that goes quiet
+# (a phone: long enough for its app to come back after the screen locked or the Wi-Fi dropped)
 QUIET_SECONDS = 3.0          # camera 2 or 3 without pictures this long: said, and off air
 
 # Why nothing is said (PictureWatch), as shown on the page.
@@ -420,6 +421,7 @@ class PictureWatch:
 
     def __init__(self, need, live):
         self.need, self.live = need, live
+        self.players_share = self.PLAYERS_SHARE
         self.people = deque()         # (seconds, people in that frame, ball found)
         self.last_at = None
         self.last_wall = None
@@ -454,6 +456,19 @@ class PictureWatch:
             self.same_since = at
         self._small = small
 
+    def relax(self):
+        """The operator pressed Kick-off: a match is on, so a sparse picture
+        (few players seen, a far camera) is enough. A wall, a desk or a face
+        close to the camera still holds the commentary."""
+        if self.need > 0:
+            self.need = 1
+            self.players_share = 0.15
+
+    def restart(self):
+        """Another camera: what the last one showed no longer counts."""
+        self.people.clear()
+        self.blank_since = self.same_since = self._small = None
+
     def state(self, wall=None):
         if self.last_at is None:
             return "none"
@@ -472,7 +487,7 @@ class PictureWatch:
         frames = len(self.people)
         players = sum(small >= self.need for _, small, _ in self.people)
         balls = sum(ball for _, _, ball in self.people)
-        if players >= max(self.SEEN, self.PLAYERS_SHARE * frames):
+        if players >= max(self.SEEN, self.players_share * frames):
             return True
         return balls >= max(self.SEEN, self.BALL_SHARE * frames) \
             and players >= max(1, self.BALL_PLAYERS * frames)
@@ -1080,6 +1095,8 @@ class LiveMatch:
         self.people_model = main
         self.people_classes = people_classes(main)
         self.people_classes_fn = people_classes
+        self.people_paths = (path, coco_path, is_football_model)
+        self.fresh_camera = False     # camera 1 changed: the people model starts over
         reid = warm["reid"] if self.settings["reid"] else None
         self.stable = StablePlayerTracker(reid=reid)
         self.stable.camera = _CameraRecorder(self.stable.camera)
@@ -1137,10 +1154,31 @@ class LiveMatch:
                       "using the general model for people (the ball still comes from the football model).")
         self.probe = self.coco = None
 
+    def _restart_people_model(self):
+        """A new camera 1: its own tracker state, and the football or the
+        general model chosen again on its first frames (the old camera's
+        choice, made on a wall or a face, does not hold for a pitch)."""
+        from ultralytics import YOLO
+
+        self.fresh_camera = False
+        path, coco_path, is_football_model = self.people_paths
+        want = self.settings["people_model"]
+        main = YOLO(str(path))
+        self.coco, self.probe = None, None
+        if want == "coco" and coco_path.exists():
+            main = YOLO(str(coco_path))
+        elif want == "auto" and is_football_model(main) and coco_path.exists():
+            self.coco = YOLO(str(coco_path))
+            self.probe = {"frames": 0, "ours": 0, "theirs": 0}
+        self.people_model = main
+        self.people_classes = self.people_classes_fn(main)
+
     def _process(self, at, frame):
         index = max(self.last_frame + 1, int(round(at * self.fps)))
         self.last_frame = index
         height, width = frame.shape[:2]
+        if self.fresh_camera:
+            self._restart_people_model()
         if self.probe is not None:
             self._probe_people_model(frame)
 
@@ -1372,7 +1410,12 @@ class LiveMatch:
         new.on_picture = self._show       # from now on its pictures are the ones shown
         self.spec, self.source = spec, new
         old.stopping.set()
+        self.watch.restart()
+        if hasattr(self, "people_paths"):
+            self.fresh_camera = True
         self.note(f"Camera 1 is now {new.describe()}.")
+        if self.state == "running":
+            self._status(f"Live: {new.describe()}")
 
     def put_on_air(self, number):
         """The operator's choice of what viewers and the stream see."""
@@ -1860,8 +1903,16 @@ class LiveMatch:
                  "confidence": 1.0, "source": "operator"}
         text = None
         if action == "kickoff":
+            if self.kickoff is not None:
+                # Kick-off again: a new match (or the first one after trying
+                # the buttons). The clock, the halves and the score start over.
+                self.second_half = self.full_time = self.manual_shootout = None
+                self.pauses, self.shootouts = [], []
+                self.score = {"team_a": 0, "team_b": 0}
+                self.note("Kick-off again: the match clock and the score start over.")
             self.kickoff, self.intro_said = now, True
             self.pauses = [p for p in self.pauses if p[1] is not None and p[1] < now]
+            self.watch.relax()
             event["type"] = "kickoff"
             names = [f"{BENGALI_COLOUR_NAMES.get(c, c)} জার্সির দল" for c in
                      (colours.get("team_a"), colours.get("team_b")) if c]

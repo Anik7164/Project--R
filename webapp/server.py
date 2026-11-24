@@ -697,6 +697,10 @@ async def feed(socket_: WebSocket):
         hub.apps[app_id] = {"name": (socket_.query_params.get("name") or "iPhone").strip()[:40]
                             or "iPhone", "client": client}
         hub.publish({"type": "cameras"})
+        # A camera of the running match whose app was away (screen locked,
+        # Wi-Fi gone): it is asked to film again as soon as the app is back.
+        if app_id in match_apps() and f"app-{app_id}" not in hub.phones:
+            wake_phone(f"app-{app_id}")
     try:
         if hub.match is not None:
             await socket_.send_text(json.dumps(hub.match.hello(), ensure_ascii=False))

@@ -1,5 +1,6 @@
 import AVFoundation
 import CoreImage
+import CoreMotion
 import ImageIO
 import UIKit
 
@@ -23,6 +24,8 @@ final class CameraSender: NSObject, ObservableObject, AVCaptureVideoDataOutputSa
     @Published private(set) var running = false
     @Published private(set) var rate = 0
     @Published private(set) var size = 1280
+    /// Held sideways: the PC gets a wide picture.
+    @Published private(set) var wide = false
 
     let session = AVCaptureSession()
 
@@ -51,7 +54,17 @@ final class CameraSender: NSObject, ObservableObject, AVCaptureVideoDataOutputSa
     private var fastReadings = 0
     private var counted = 0
     private var countedAt: CFTimeInterval = 0
-    private var orientation: CGImagePropertyOrientation = .up
+    private var orientation: CGImagePropertyOrientation = .right
+
+    // How the phone is held, from the motion sensor: iOS stops telling the
+    // app when the screen's rotation lock is on, the sensor still knows.
+    private let motion = CMMotionManager()
+    private let motionQueue: OperationQueue = {
+        let queue = OperationQueue()
+        queue.maxConcurrentOperationCount = 1
+        return queue
+    }()
+    private var held: UIDeviceOrientation = .unknown      // motionQueue only
 
     @MainActor
     func start(base: URL, key: String, name: String, back: Bool, token: String = "", app: String = "") {
@@ -69,11 +82,7 @@ final class CameraSender: NSObject, ObservableObject, AVCaptureVideoDataOutputSa
         wanted = true
         status = "Opening the camera…"
         UIApplication.shared.isIdleTimerDisabled = true
-        UIDevice.current.beginGeneratingDeviceOrientationNotifications()
-        NotificationCenter.default.addObserver(self, selector: #selector(orientationChanged),
-                                               name: UIDevice.orientationDidChangeNotification, object: nil)
-        didGuess = false
-        updateOrientation()
+        startWatchingHowHeld()
         AVCaptureDevice.requestAccess(for: .video) { granted in
             Task { @MainActor in
                 guard self.wanted else { return }
@@ -106,8 +115,7 @@ final class CameraSender: NSObject, ObservableObject, AVCaptureVideoDataOutputSa
         }
         if running {
             UIApplication.shared.isIdleTimerDisabled = false
-            NotificationCenter.default.removeObserver(self, name: UIDevice.orientationDidChangeNotification,
-                                                      object: nil)
+            motion.stopAccelerometerUpdates()
         }
         running = false
         rate = 0
@@ -200,38 +208,54 @@ final class CameraSender: NSObject, ObservableObject, AVCaptureVideoDataOutputSa
         }
     }
 
+    /// Pictures go to the PC upright and the right way round: wide when
+    /// the phone is held sideways, tall when upright, also with the
+    /// rotation lock on.
     @MainActor
-    @objc private func orientationChanged() {
-        updateOrientation()
-    }
-
-    /// Pictures go to the PC upright, held portrait or landscape.
-    @MainActor
-    private func updateOrientation() {
-        let value: CGImagePropertyOrientation?
-        switch UIDevice.current.orientation {
-        case .portrait: value = .right
-        case .portraitUpsideDown: value = .left
-        case .landscapeLeft: value = back ? .up : .down
-        case .landscapeRight: value = back ? .down : .up
-        default: value = initialOrientation()
-        }
-        if let value { work.async { self.orientation = value } }
-    }
-
-    @MainActor
-    private func initialOrientation() -> CGImagePropertyOrientation? {
-        guard running, !didGuess else { return nil }       // face up or down: keep the last one
-        didGuess = true
+    private func startWatchingHowHeld() {
+        let back = self.back
         let scene = UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }.first
+        // Until the sensor answers: as the screen is turned.
+        let first: UIDeviceOrientation
         switch scene?.interfaceOrientation {
-        case .landscapeRight?: return back ? .up : .down
-        case .landscapeLeft?: return back ? .down : .up
-        default: return .right
+        case .landscapeRight?: first = .landscapeLeft      // (the screen's names are the other way round)
+        case .landscapeLeft?: first = .landscapeRight
+        default: first = .portrait
+        }
+        motionQueue.addOperation { self.held = .unknown }
+        apply(first, back: back)
+        guard motion.isAccelerometerAvailable else { return }
+        motion.accelerometerUpdateInterval = 0.2
+        motion.startAccelerometerUpdates(to: motionQueue) { [weak self] data, _ in
+            guard let self, let gravity = data?.acceleration,
+                  let way = CameraSender.howHeld(x: gravity.x, y: gravity.y, z: gravity.z, was: self.held),
+                  way != self.held else { return }
+            self.held = way
+            self.apply(way, back: back)
         }
     }
 
-    private var didGuess = false
+    private func apply(_ way: UIDeviceOrientation, back: Bool) {
+        let value: CGImagePropertyOrientation
+        switch way {
+        case .portraitUpsideDown: value = .left
+        case .landscapeLeft: value = back ? .up : .down          // home button (or the side button) right
+        case .landscapeRight: value = back ? .down : .up
+        default: value = .right
+        }
+        let wide = way == .landscapeLeft || way == .landscapeRight
+        work.async { self.orientation = value }
+        Task { @MainActor in self.wide = wide }
+    }
+
+    /// Which way is down, from gravity (x right, y up the screen): nil while
+    /// the phone lies flat or is half-way between two ways (it keeps the last).
+    static func howHeld(x: Double, y: Double, z: Double, was: UIDeviceOrientation) -> UIDeviceOrientation? {
+        if abs(z) > 0.85 { return nil }
+        if was != .unknown && abs(abs(x) - abs(y)) < 0.3 { return nil }
+        if abs(y) >= abs(x) { return y < 0 ? .portrait : .portraitUpsideDown }
+        return x < 0 ? .landscapeLeft : .landscapeRight
+    }
 
     // MARK: socket
 

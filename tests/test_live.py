@@ -279,6 +279,37 @@ def test_cameras_are_set_up_first_and_kickoff_starts_the_commentary():
     assert _lines(said)[-1]["type"] == "filler"
 
 
+def test_kickoff_again_starts_the_match_over():
+    match, said = _match()
+    match.state = "running"
+    match.clock = 10.0
+    match.operator("kickoff")
+    match.clock = 20.0
+    match.operator("goal", "team_a")
+    match.operator("second_half")
+    match.clock = 30.0
+    match.operator("full_time")
+    assert match.score["team_a"] == 1 and match.phase() == "full_time"
+    match.clock = 100.0
+    match.operator("kickoff")               # the real match, after trying the buttons
+    match.clock = 130.0
+    assert match.score == {"team_a": 0, "team_b": 0}
+    assert match.phase() == "play" and match.minute(130.0) == 1
+    assert match.second_half is None and match.full_time is None
+
+
+def test_after_kickoff_a_sparse_picture_is_enough():
+    watch = live_engine.PictureWatch(3, live=False)
+    for i in range(100):                    # one far player in a fifth of the frames
+        watch.frame(i * 0.2, None, [0.1] if i % 5 == 0 else [])
+    assert watch.state() == "empty"
+    watch.relax()                           # the operator pressed Kick-off
+    assert watch.state() == "ok"
+    for i in range(100, 220):               # a face close to the camera: still held
+        watch.frame(i * 0.2, None, [0.8])
+    assert watch.state() == "empty"
+
+
 def test_cameras_change_while_the_match_runs():
     import threading
     import time
@@ -313,9 +344,13 @@ def test_cameras_change_while_the_match_runs():
         match.set_cameras(spec["A"], [spec["B"]])       # camera 2 unchanged: not opened again
         assert match.others[2] is two and numbers() == [1, 2]
         zero = match.source.zero
+        match.state = "running"
+        match.watch.frame(1.0, None, 6)
         match.set_cameras(spec["C"], [spec["B"]])       # another camera 1, the same clock
         assert match.spec is spec["C"] and match.source.spec["feed"] is feeds["C"]
         assert match.source.zero == zero
+        # ... and it starts fresh: what the old camera showed does not count.
+        assert not match.watch.people and match.message == "Live: phone C"
         dead = {"kind": "phone", "feed": live_engine.PushFeed("D"), "id": "D", "label": "phone D"}
         with pytest.raises(ValueError):
             match.set_cameras(dead, [spec["B"]], wait=0.5)   # sends nothing: camera 1 stays
@@ -748,6 +783,13 @@ def test_an_iphone_the_pc_no_longer_uses_is_told_to_stop(monkeypatch):
                 client.post("/api/stop")
                 until(iphone, "camera_release")
                 assert server.hub.taken == set()
+        # A camera of the running match whose app was away is asked again when it is back.
+        match = FakeMatch({"kind": "camera", "index": 0}, {}, None, None,
+                          others=[{"kind": "phone", "id": "app-xyz"}])
+        monkeypatch.setattr(server.hub, "match", match)
+        with client.websocket_connect("/ws?app=xyz&name=Corner") as back:
+            assert until(back, "camera_request")["token"]
+        match.stop()
         # No match: cameras cannot be changed in one.
         assert client.post("/api/match/cameras", json={
             "source": {"kind": "camera", "index": 0}}).status_code == 409

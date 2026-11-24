@@ -26,6 +26,8 @@ What it does:
   phone starts filming by itself, watching or operating. "Use this device as a camera" still
   starts it by hand. It sends JPEG pictures to the PC's `/ws/camera`, up to 24 a second,
   never more than 3 on their way (slow Wi-Fi gets smaller pictures, 1280 › 960 › 720, instead of lag).
+  Held sideways, the PC gets a wide picture; upright, a tall one. The motion sensor decides,
+  so this also works with the screen's rotation lock on.
   Unlike Safari, this works over plain http. Only an IP camera needs an rtsp:// address.
 - **Stops when the PC lets it go.** When the operator chooses another device, goes to fewer
   cameras, or stops the match, the PC tells the app and its camera screen closes.
