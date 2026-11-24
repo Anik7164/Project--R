@@ -5,5 +5,11 @@
   "ios": {
     "contentInset": "never",
     "backgroundColor": "#0b1210"
+  },
+  "server": {
+    "allowNavigation": [
+      "*"
+    ],
+    "errorPath": "index.html"
   }
 }

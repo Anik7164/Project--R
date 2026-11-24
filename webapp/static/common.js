@@ -6,6 +6,13 @@
 
 const SHELL = Boolean(window.PROJECT_R_SHELL) ||
   ["capacitor:", "ionic:", "file:"].includes(location.protocol);
+// The PC's own page, opened inside the iPhone app (not in Safari).
+const IN_APP = SHELL || Boolean(window.Capacitor?.isNativePlatform?.());
+// iOS does not let the app's own pages (capacitor://) reach a PC over plain
+// http (mixed content), so the app only asks which PC and then opens the
+// PC's page itself, just as Safari does. When that page cannot be loaded
+// the app comes back to its first page (server.errorPath), which then asks.
+const OPEN_WAIT_MS = 15000;
 
 function remembered(name) {
   try { return localStorage.getItem(name); } catch { return null; }
@@ -169,6 +176,14 @@ function askForServer(message) {
       if (!found) { error.textContent = "That does not look like an address."; return; }
       const wanted = found.key || box.elements.key.value.trim();
       error.textContent = "Connecting…";
+      if (SHELL) {                          // open the PC's page (see OPEN_WAIT_MS)
+        SERVER = found.server;
+        key = wanted;
+        remember("server", SERVER);
+        remember(`key ${SERVER}`, key);
+        openPc();
+        return;
+      }
       try {
         const controller = new AbortController();
         const timer = setTimeout(() => controller.abort(), 6000);
@@ -193,9 +208,28 @@ function askForServer(message) {
   });
 }
 
+// In the app: load the PC's page (the same page Safari shows) in the app.
+function openPc() {
+  remember("opening", String(Date.now()));
+  const page = /camera\.html$/.test(location.pathname) ? "/camera.html" : "/";
+  location.href = `${SERVER}${page}${key ? `?key=${encodeURIComponent(key)}` : ""}`;
+}
+
 // Resolves once the server is known (at once outside the app).
 async function findServer() {
   if (!SHELL) return;
+  if (location.protocol !== "http:" && location.protocol !== "https:") {
+    // The iPhone app: open the PC's page, unless that just failed or the
+    // person asked to change the PC.
+    const opened = Number(remembered("opening") || 0);
+    remember("opening", null);
+    const failed = SERVER && Date.now() - opened < OPEN_WAIT_MS;
+    const change = new URLSearchParams(location.search).has("change");
+    if (SERVER && !failed && !change) { openPc(); return new Promise(() => {}); }
+    await askForServer(failed ? `Could not open ${SERVER}. Is Project R running on the PC ` +
+      "with \"phones on the Wi-Fi can join\", and is this phone on the same Wi-Fi?" : "");
+    return new Promise(() => {});           // askForServer went on to the PC's page
+  }
   if (SERVER) {
     try {
       const controller = new AbortController();
@@ -213,6 +247,12 @@ async function findServer() {
 
 // In the app: a small "PC: 192.168.0.5:8000 · change" in the header.
 function showServer(element) {
+  if (IN_APP && !SHELL && element) {        // the PC's page inside the iPhone app
+    element.hidden = false;
+    element.textContent = `PC ${location.host} · change`;
+    element.onclick = () => { location.href = "capacitor://localhost/?change=1"; };
+    return;
+  }
   if (!SHELL || !element) return;
   element.hidden = false;
   element.textContent = `PC ${SERVER.replace(/^https?:\/\//, "")} · change`;

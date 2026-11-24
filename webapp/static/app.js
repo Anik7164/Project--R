@@ -1004,7 +1004,7 @@ async function boot() {
       $("share").textContent = `Phones and other PCs on this Wi-Fi: viewers open ${state.share.url} · ` +
         `the iPhone app and the operator use address ${state.share.address} with key ${state.share.key}`;
       showShareQr(`${state.share.url}/?key=${encodeURIComponent(state.share.key)}`);
-    } else if (operator && !SHELL && !BROADCAST) {
+    } else if (operator && !IN_APP && !BROADCAST) {
       // Not shared on the Wi-Fi: the button says how to share instead of a code.
       $("shareQrCode").hidden = true;
       $("phoneText").textContent = "Phones cannot reach Project R right now. Close it and start " +
@@ -1038,7 +1038,7 @@ async function showShareQr(text) {
     $("shareQrCode").innerHTML = code.createSvgTag({ cellSize: 5, margin: 3, scalable: true });
     $("shareQrCode").hidden = false;
     shownQr = text;
-    if (!SHELL) phoneButton();        // not on the phone itself
+    if (!IN_APP) phoneButton();       // not on the phone itself
   } catch { /* the address and key are still written in Settings */ }
 }
 
