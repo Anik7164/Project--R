@@ -278,7 +278,9 @@ struct MatchView: View {
                 onFailed: { model.failed($0) })
             .ignoresSafeArea(edges: [.bottom, .horizontal])
             .background(Color.night.ignoresSafeArea())
-            .sheet(isPresented: $model.showCamera) {
+            // Closing the camera screen stops the camera (turning the phone
+            // rebuilds the screen's views, which must not).
+            .sheet(isPresented: $model.showCamera, onDismiss: { model.cameraClosed() }) {
                 if let base = model.base {
                     CameraScreen(sender: model.camera, base: base, key: model.operatorKey)
                 }

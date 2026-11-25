@@ -225,7 +225,7 @@ final class CameraSender: NSObject, ObservableObject, AVCaptureVideoDataOutputSa
         motionQueue.addOperation { self.held = .unknown }
         apply(first, back: back)
         guard motion.isAccelerometerAvailable else { return }
-        motion.accelerometerUpdateInterval = 0.2
+        motion.accelerometerUpdateInterval = 0.1
         motion.startAccelerometerUpdates(to: motionQueue) { [weak self] data, _ in
             guard let self, let gravity = data?.acceleration,
                   let way = CameraSender.howHeld(x: gravity.x, y: gravity.y, z: gravity.z, was: self.held),

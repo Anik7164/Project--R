@@ -127,17 +127,26 @@ struct ScannerSheet: View {
 
 /// "Use this device as a camera" on the match page opens this, and so does
 /// the operator choosing this iPhone on the PC (then it is already filming).
+///
+/// The camera stops when the sheet is closed (MatchView's onDismiss), not
+/// when this view disappears: turning the phone can rebuild the sheet's
+/// views, and that must not stop the filming. Held sideways, the picture and
+/// the buttons sit side by side (the same views, so the preview stays).
 struct CameraScreen: View {
     @ObservedObject var sender: CameraSender
     let base: URL
     let key: String
     @Environment(\.dismiss) private var dismiss
+    @Environment(\.verticalSizeClass) private var verticalSizeClass
     @State private var name = Store.cameraName
     @State private var back = Store.cameraBack
 
+    private var sideways: Bool { verticalSizeClass == .compact }
+
     var body: some View {
         NavigationStack {
-            VStack(spacing: 14) {
+            let layout = sideways ? AnyLayout(HStackLayout(spacing: 14)) : AnyLayout(VStackLayout(spacing: 14))
+            layout {
                 ZStack(alignment: .topLeading) {
                     CameraPreview(session: sender.session)
                     if sender.running {
@@ -151,44 +160,18 @@ struct CameraScreen: View {
                         Text("The camera starts when you press Start, or when the operator chooses this iPhone on the PC.")
                             .font(.footnote)
                             .foregroundStyle(.secondary)
+                            .padding()
                             .frame(maxWidth: .infinity, maxHeight: .infinity)
                     }
                 }
                 .background(Color.black)
                 .clipShape(RoundedRectangle(cornerRadius: 12))
 
-                Text(sender.status)
-                    .font(.subheadline)
-                    .multilineTextAlignment(.center)
-
-                if sender.running {
-                    Button(role: .destructive) {
-                        sender.stop()
-                    } label: {
-                        Text("Stop").frame(maxWidth: .infinity)
-                    }
-                    .buttonStyle(.bordered)
-                } else {
-                    TextField("Camera name, for example: Goal side", text: $name)
-                        .textFieldStyle(.roundedBorder)
-                    Picker("Lens", selection: $back) {
-                        Text("Back camera").tag(true)
-                        Text("Front camera").tag(false)
-                    }
-                    .pickerStyle(.segmented)
-                    Button {
-                        Store.cameraName = name.trimmingCharacters(in: .whitespaces)
-                        Store.cameraBack = back
-                        sender.start(base: base, key: key, name: Store.phoneName, back: back, app: Store.deviceID)
-                    } label: {
-                        Text("Start sending to the PC").frame(maxWidth: .infinity)
-                    }
-                    .buttonStyle(.borderedProminent)
+                ScrollView {
+                    controls
                 }
-                Text("On the PC, choose this iPhone (“\(Store.phoneName)”) for Camera 1, 2 or 3. Keep this screen open while it films; the phone stays awake.")
-                    .font(.footnote)
-                    .foregroundStyle(.secondary)
-                    .multilineTextAlignment(.center)
+                .frame(maxWidth: sideways ? 300 : .infinity)
+                .fixedSize(horizontal: false, vertical: !sideways)
             }
             .padding()
             .navigationTitle("This phone as a camera")
@@ -199,6 +182,53 @@ struct CameraScreen: View {
                 }
             }
         }
-        .onDisappear { sender.stop() }
+    }
+
+    private var controls: some View {
+        VStack(spacing: 14) {
+            Text(sender.status)
+                .font(.subheadline)
+                .multilineTextAlignment(.center)
+
+            if sender.running {
+                Button(role: .destructive) {
+                    sender.stop()
+                } label: {
+                    Text("Stop").frame(maxWidth: .infinity)
+                }
+                .buttonStyle(.bordered)
+            } else {
+                TextField("Camera name, for example: Goal side", text: $name)
+                    .textFieldStyle(.roundedBorder)
+                Picker("Lens", selection: $back) {
+                    Text("Back camera").tag(true)
+                    Text("Front camera").tag(false)
+                }
+                .pickerStyle(.segmented)
+                Button {
+                    Store.cameraName = name.trimmingCharacters(in: .whitespaces)
+                    Store.cameraBack = back
+                    sender.start(base: base, key: key, name: Store.phoneName, back: back, app: Store.deviceID)
+                } label: {
+                    Text("Start sending to the PC").frame(maxWidth: .infinity)
+                }
+                .buttonStyle(.borderedProminent)
+            }
+            Text("On the PC, choose this iPhone (“\(Store.phoneName)”) for Camera 1, 2 or 3. Keep this screen open while it films; the phone stays awake. Hold it sideways for a wide picture.")
+                .font(.footnote)
+                .foregroundStyle(.secondary)
+                .multilineTextAlignment(.center)
+            Text("App \(CameraScreen.version)")
+                .font(.caption2)
+                .foregroundStyle(.tertiary)
+        }
+    }
+
+    /// Which build is installed, e.g. "2.2 (3)".
+    static var version: String {
+        let info = Bundle.main.infoDictionary
+        let short = info?["CFBundleShortVersionString"] as? String ?? "?"
+        let build = info?["CFBundleVersion"] as? String ?? "?"
+        return "\(short) (\(build))"
     }
 }

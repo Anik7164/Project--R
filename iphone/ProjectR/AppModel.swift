@@ -183,6 +183,12 @@ final class AppModel: ObservableObject {
                      token: token, app: Store.deviceID)
     }
 
+    /// The camera screen was closed (by the person, or because the PC let
+    /// the phone go): the camera stops, unless it was opened again meanwhile.
+    func cameraClosed() {
+        if !showCamera { camera.stop() }
+    }
+
     /// The PC no longer uses this phone as a camera (another device was
     /// chosen, fewer cameras, or the match stopped): stop and close.
     func cameraReleased() {
